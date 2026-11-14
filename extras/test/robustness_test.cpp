@@ -4,7 +4,7 @@
 // (FINDING lines only remain as historical documentation of pre-fix
 // behaviour - they must NOT print anymore).
 //
-//   python -m ziglang cc -Wall -I extras/test/stub -I src \
+//   python -m ziglang cc -Wall -I extras/test/stub -I src
 //       extras/test/robustness_test.cpp src/ADRC.cpp -o extras/test/robustness_test.exe
 //
 // Exit code 0 = the library contained every adversarial input.
@@ -121,8 +121,7 @@ int main() {
         ADRC c(&Input, &Output, &Setpoint, 10, 4, 25);
         c.SetOutputLimits(-100, 100); c.SetSampleTime(10); c.SetMode(AUTOMATIC);
         double pos = 0, vel = 0;
-        long i = 0;
-        for (double t = 0; t < 8.0; t += 0.001, i++) {
+        for (double t = 0; t < 8.0; t += 0.001) {
             // stall the loop for 300 ms at t = 2 s (e.g. blocking print)
             if (t >= 2.0 && t < 2.299) continue;
             double acc = -1.5 * vel - 0.5 * pos + 10 * Output;

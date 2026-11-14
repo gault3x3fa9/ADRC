@@ -141,6 +141,9 @@ void ADRC::Initialize() {
     z1 = (float)*myInput;
     z2 = 0.0f;
     z3 = -b0 * out;
+    // With an absurd b0 (~1e38) even this can overflow: clamp to the largest
+    // finite float so a freshly initialised observer is always usable.
+    if (!isfinite(z3)) z3 = (z3 < 0.0f || isnan(z3) ? -FLT_MAX : FLT_MAX);
 
     // Ramped reference restarts from the current measurement: bumpless
     // (the first control action is unchanged) and no reference jump.
@@ -218,6 +221,16 @@ bool ADRC::Compute() {
     z1 += stepDt * (z2 - beta1 * e);
     z2 += stepDt * (z3 - beta2 * e + b0 * uPrev);
     z3 += stepDt * (-beta3 * e);
+
+    // Self-healing: with absurd-but-accepted tunings (e.g. b0 ~ 1e38) the
+    // explicit-Euler states can overflow to +-Inf and would stay bricked
+    // forever (output safely held, but the controller dead). Re-initialise
+    // the observer from the current sample instead and hold this round.
+    if (!isfinite(z1) || !isfinite(z2) || !isfinite(z3)) {
+        computing = false;
+        Initialize();
+        return false;
+    }
 
     // 3. State-error feedback (PD on estimated states, on the ramped ref)
     float u0 = Kp * (rEff - z1) - Kd * z2;
@@ -348,6 +361,7 @@ void ADRC1::Initialize() {
 
     z1 = (float)*myInput;
     z2 = -b0 * out;          // y' = 0 = f + b0*u  ->  f = -b0*u (bumpless)
+    if (!isfinite(z2)) z2 = (z2 < 0.0f || isnan(z2) ? -FLT_MAX : FLT_MAX);
 
     rEff = (float)*myInput;
     rEffValid = true;
@@ -414,6 +428,13 @@ bool ADRC1::Compute() {
     // 2. LESO update (explicit Euler, first-order plant model)
     z1 += stepDt * (-beta1 * e + z2 + b0 * uPrev);
     z2 += stepDt * (-beta2 * e);
+
+    // Self-healing: see ADRC::Compute (overflowing states re-initialise)
+    if (!isfinite(z1) || !isfinite(z2)) {
+        computing = false;
+        Initialize();
+        return false;
+    }
 
     // 3. Proportional control on the estimated state + disturbance rejection
     float u0 = Kp * (rEff - z1);

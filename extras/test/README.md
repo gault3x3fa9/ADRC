@@ -1,6 +1,6 @@
 # ADRC test system
 
-Five layers of evidence for this library. Everything runs on a PC; no Arduino
+Six layers of evidence for this library. Everything runs on a PC; no Arduino
 hardware required. Compile host binaries with any C++ compiler (the project
 CI uses `g++`; `python -m ziglang cc` from `pip install ziglang` works too).
 Generated reports (logs, CSV, PNG, binaries) are **not** committed: every
@@ -54,7 +54,34 @@ python -m ziglang cc -Wall -I extras/test/stub -I src \
     extras/test/robustness_test.cpp src/ADRC.cpp -o robustness_test && ./robustness_test
 ```
 
-## 4. On-target CPU / footprint benchmark — `../bench_avr/`
+## 4. Deterministic fuzz + stability sweep — `fuzz_test.cpp`
+
+Hundreds of thousands of random API sequences and sensor values (NaN,
+±Inf, subnormals, ±0, 1e38) verify the documented invariants on BOTH
+controller classes: output always finite and clamped, `Compute()==false`
+leaves `Output` bit-unchanged, accepted tunings keep the observer safe,
+states stay finite. A closed-loop chaos phase (9 tunings × 100k steps with
+noise) and a b0-error sweep (1/8×..8× at three bandwidths) complete the
+picture. Same seed ⇒ same run: failures are reproducible.
+
+```bash
+g++ -O2 -Wall -Wextra -std=gnu++11 -I extras/test/stub -I src \
+    extras/test/fuzz_test.cpp src/ADRC.cpp -o fuzz_test && ./fuzz_test
+```
+
+Headlines: 800k API iterations + 900k chaos steps, **0 invariant
+violations**. The sweep: b0 off by 4× converges with zero steady-state
+error at every tested bandwidth; at 8× it degrades (slow if overestimated,
+oscillatory if underestimated). This fuzz found and fixed a real hole:
+observer states could overflow to Inf with absurd-but-accepted tunings and
+stay bricked — `Compute()` now self-heals (re-initialises from the current
+sample) and `Initialize()` clamps, so the controller always recovers.
+
+Extra static checks in the repo history: all suites build warning-free
+with `-Wall -Wextra -Wpedantic -std=gnu++11` (AVR core parity) and run
+clean under UBSan (trap mode) via clang.
+
+## 5. On-target CPU / footprint benchmark — `../bench_avr/`
 
 `bench_avr.ino` measures with cycle-level precision (Timer1, no prescaler)
 the cost of `Compute()` on an ATmega328P @ 16 MHz: hot path (not-yet-time
@@ -76,7 +103,7 @@ hot path 30 cycles = 1.9 µs. Library + example footprint ≈ 6.3–6.7 KB flash
 on-target: ADRC costs ~1.7x PID (216 µs vs 126 µs per update) — both
 negligible on this MCU.
 
-## 5. Real-world usage campaign — `usage_campaign.cpp`
+## 6. Real-world usage campaign — `usage_campaign.cpp`
 
 Six Arduino-typical scenarios run against the real library code under
 realistic constraints (10/100 ms sampling, 8-bit PWM output, 10-bit ADC
@@ -107,6 +134,7 @@ steady state; the thermal plant with 0.8 s dead time is handled with
 | `host_test.cpp` | functional unit tests (also run in CI) |
 | `benchmark.cpp` | ADRC vs PID effectiveness benchmark |
 | `robustness_test.cpp` | adversarial/numeric robustness reproducers |
+| `fuzz_test.cpp` | deterministic API fuzz, chaos loop, b0 sweep (in CI) |
 | `usage_campaign.cpp` | six real-world use cases, metrics + CSV output |
 | `plot_usage_campaign.py` | PNG plots for the usage campaign CSVs |
 | `../bench_avr/` | on-target firmware + Wokwi project |

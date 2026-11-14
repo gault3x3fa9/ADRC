@@ -83,7 +83,7 @@ void loop() {
 
 The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is everything you don't model.
 
-1. **Find b0** (units: input-units / s² per output-unit). Apply a small output step from rest and measure the initial acceleration: `b0 ≈ acceleration / output`. An estimate within a factor of ~2 is usually enough (in the repo's simulations both 0.5× and 2× converge with zero steady-state error). Too *small* → more aggressive loop; too *large* → sluggish. The sign sets the direction: **negative b0** when a positive output makes the input decrease (e.g. cooling).
+1. **Find b0** (units: input-units / s² per output-unit). Apply a small output step from rest and measure the initial acceleration: `b0 ≈ acceleration / output`. An estimate within a factor of ~2 is usually enough; measured on the repo's plant, the loop still converges with zero steady-state error for b0 off by **4× in either direction** (at 8× it degrades: slow if overestimated, oscillatory if underestimated). Too *small* → more aggressive loop; too *large* → sluggish. The sign sets the direction: **negative b0** when a positive output makes the input decrease (e.g. cooling).
 2. **Choose ωc** [rad/s]: settling time ≈ **5–6 / ωc** seconds. Start low (2–4) and increase until fast enough without saturating the actuator.
 3. **Choose ωo** [rad/s]: typically **3–10 × ωc**. Higher = faster disturbance estimation but more sensor noise in the output. Lower it if the output is noisy.
 4. **Respect the sampling limit**: explicit-Euler observer stability needs **ωo · dt ≤ 0.5** (at 10 ms → ωo ≤ 50 rad/s). `myADRC.IsObserverSafe()` tells you; if you need a faster observer, shorten `SetSampleTime()`.
@@ -103,7 +103,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 | Function | Description |
 |---|---|
 | `ADRC(&Input, &Output, &Setpoint, b0, ωc, ωo)` | Constructor. Invalid parameters are ignored; safe defaults are used. |
-| `bool Compute()` | Call every `loop()`. Runs only when a sample period elapsed; returns `true` if `Output` was updated. Non-finite (NaN/±Inf) readings are ignored with the output held; reentrant calls are safe no-ops. |
+| `bool Compute()` | Call every `loop()`. Runs only when a sample period elapsed; returns `true` if `Output` was updated. Non-finite (NaN/±Inf) readings are ignored with the output held; reentrant calls are safe no-ops. If absurd-but-accepted tunings make an observer state overflow, `Compute()` re-initialises the observer from the current sample (self-healing) and holds that round. |
 | `bool SetTunings(b0, ωc, ωo)` | Change tunings on the fly. Returns `false` and changes nothing for `b0 == 0`, subnormal or out-of-float-range values, NaN/Inf, ω ≤ 0, or ωo · dt > 0.5 at the current sample time. |
 | `void SetSampleTime(ms)` | Sampling period (default 10 ms). 0, > 4000000, or values that would make ωo · dt > 0.5 are ignored. |
 | `void SetOutputLimits(min, max)` | Saturation. Non-finite limits are ignored. The observer uses the saturated output, so it does not wind up. Default 0..255: on signed (bidirectional) plants set symmetric limits. |
@@ -124,7 +124,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 
 ## Measured results
 
-All evidence is generated from the real library code by the host test system in `extras/test/` — every number below is reproducible with the commands at the bottom of this page. The `SimulatedSystem` example was also run on real hardware (RP2040-class board): step response, disturbance rejection and observer tracking all match the simulation within sampling resolution.
+All evidence is generated from the real library code by the host test system in `extras/test/` — every number below is reproducible with the commands at the bottom of this page. Verification stack: 66 functional checks, 17 adversarial reproducers, a deterministic fuzz (800k random API iterations + 900k closed-loop chaos steps, 0 invariant violations — warning-free at `-std=gnu++11 -Wall -Wextra -Wpedantic` and clean under UBSan), and the ADRC-vs-PID benchmark below. The `SimulatedSystem` example was also run on real hardware (RP2040-class board): step response, disturbance rejection and observer tracking all match the simulation within sampling resolution.
 
 **Closed-loop usage campaign** (`usage_campaign`, see `extras/test/README.md`): six Arduino-typical scenarios — motor position, wheel speed with b0 off by ±2×, thermal plant with 0.8 s dead time, 8-bit PWM + 10-bit ADC + noise, reverse-acting Peltier (b0 < 0), square-wave tracking.
 

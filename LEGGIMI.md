@@ -83,7 +83,7 @@ void loop() {
 
 Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f` è tutto ciò che non modelli.
 
-1. **Trova b0** (unità: unità-di-input / s² per unità-di-output). Applica un piccolo gradino di uscita da fermo e misura l'accelerazione iniziale: `b0 ≈ accelerazione / uscita`. Una stima entro un fattore ~2 di solito basta (nelle simulazioni della repo sia 0.5× sia 2× convergono con errore a regime nullo). Troppo *piccolo* → anello più aggressivo; troppo *grande* → più lento. Il segno definisce la direzione: **b0 negativo** quando un'uscita positiva fa diminuire l'ingresso (es. raffreddamento).
+1. **Trova b0** (unità: unità-di-input / s² per unità-di-output). Applica un piccolo gradino di uscita da fermo e misura l'accelerazione iniziale: `b0 ≈ accelerazione / uscita`. Una stima entro un fattore ~2 di solito basta; misurato sulla pianta della repo, l'anello converge con errore a regime nullo anche con b0 sbagliata di **4× in entrambe le direzioni** (a 8× degrada: lenta se sovrastimata, oscillante se sottostimata). Troppo *piccolo* → anello più aggressivo; troppo *grande* → più lento. Il segno definisce la direzione: **b0 negativo** quando un'uscita positiva fa diminuire l'ingresso (es. raffreddamento).
 2. **Scegli ωc** [rad/s]: il tempo di assestamento è circa **5–6 / ωc** secondi. Parti basso (2–4) e aumenta finché la velocità è sufficiente senza saturare l'attuatore.
 3. **Scegli ωo** [rad/s]: tipicamente **3–10 × ωc**. Più alto = stima del disturbo più veloce, ma più rumore del sensore in uscita. Abbassalo se l'uscita è rumorosa.
 4. **Rispetta il limite di campionamento**: la stabilità dell'osservatore (Eulero esplicito) richiede **ωo · dt ≤ 0.5** (a 10 ms → ωo ≤ 50 rad/s). `myADRC.IsObserverSafe()` te lo dice; se serve un osservatore più veloce, riduci `SetSampleTime()`.
@@ -103,7 +103,7 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 | Funzione | Descrizione |
 |---|---|
 | `ADRC(&Input, &Output, &Setpoint, b0, ωc, ωo)` | Costruttore. I parametri non validi vengono ignorati; si usano default sicuri. |
-| `bool Compute()` | Da chiamare a ogni `loop()`. Calcola solo quando è trascorso il periodo di campionamento; restituisce `true` se `Output` è stato aggiornato. Le letture non finite (NaN/±Inf) vengono ignorate con uscita congelata; le chiamate rientranti sono no-op sicure. |
+| `bool Compute()` | Da chiamare a ogni `loop()`. Calcola solo quando è trascorso il periodo di campionamento; restituisce `true` se `Output` è stato aggiornato. Le letture non finite (NaN/±Inf) vengono ignorate con uscita congelata; le chiamate rientranti sono no-op sicure. Se tarature assurde-ma-accettate fanno overfloware uno stato dell'osservatore, `Compute()` re-inizializza l'osservatore dalla misura corrente (auto-riparazione) e tiene l'uscita per quel giro. |
 | `bool SetTunings(b0, ωc, ωo)` | Cambia la taratura al volo. Restituisce `false` senza modificare nulla per `b0 == 0`, valori subnormali o fuori range float, NaN/Inf, ω ≤ 0, oppure ωo · dt > 0.5 al tempo di campionamento attuale. |
 | `void SetSampleTime(ms)` | Periodo di campionamento (default 10 ms). 0, > 4000000, o valori che renderebbero ωo · dt > 0.5 vengono ignorati. |
 | `void SetOutputLimits(min, max)` | Saturazione. Limiti non finiti ignorati. L'osservatore usa l'uscita saturata, quindi non va in windup. Default 0..255: su sistemi bidirezionali imposta limiti simmetrici. |
@@ -124,7 +124,7 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 
 ## Risultati misurati
 
-Tutte le evidenze sono generate dal codice reale della libreria tramite il sistema di test su PC in `extras/test/` — ogni numero qui sotto è riproducibile con i comandi in fondo alla pagina. L'esempio `SimulatedSystem` è stato inoltre eseguito su hardware reale (scheda classe RP2040): risposta al gradino, reiezione del disturbo e tracking dell'osservatore combaciano con la simulazione entro la risoluzione di campionamento.
+Tutte le evidenze sono generate dal codice reale della libreria tramite il sistema di test su PC in `extras/test/` — ogni numero qui sotto è riproducibile con i comandi in fondo alla pagina. Stack di verifica: 66 check funzionali, 17 riproduttori avversariali, un fuzz deterministico (800k iterazioni API casuali + 900k passi di chaos in closed loop, 0 violazioni di invariante — senza warning con `-std=gnu++11 -Wall -Wextra -Wpedantic` e pulito sotto UBSan), e il benchmark ADRC-vs-PID qui sotto. L'esempio `SimulatedSystem` è stato inoltre eseguito su hardware reale (scheda classe RP2040): risposta al gradino, reiezione del disturbo e tracking dell'osservatore combaciano con la simulazione entro la risoluzione di campionamento.
 
 **Campagna casi d'uso** (`usage_campaign`, vedi `extras/test/README.md`): sei scenari tipici Arduino — posizione motore, velocità con b0 sbagliata ±2×, termica con ritardo 0.8 s, PWM 8 bit + ADC 10 bit + rumore, Peltier inversa (b0 < 0), tracking a onda quadra.
 

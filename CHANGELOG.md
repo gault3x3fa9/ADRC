@@ -6,6 +6,21 @@ Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 ## [1.1.0] — in sviluppo
 
 ### Aggiunto
+- Test fuzz deterministico (`extras/test/fuzz_test.cpp`, in CI): 800k
+  iterazioni API casuali (NaN/Inf/subnormali/±0/1e38) + 900k passi di
+  chaos in closed loop con verifica di 6 invarianti documentate, più
+  sweep di stabilità con b0 errata 1/8×..8×. Zero violazioni; pulito
+  anche sotto UBSan (trap) e a `-std=gnu++11 -Wall -Wextra -Wpedantic`
+  (parità col core AVR).
+- **Auto-riparazione dell'osservatore** (bug trovato dal fuzz): con
+  tarature assurde-ma-accettate (b0 ~ 1e38) gli stati potevano
+  overfloware a ±Inf e restare brickati per sempre (uscita safe ma
+  controllore morto). Ora `Compute()` rileva stati non finiti,
+  re-inizializza dalla misura corrente e tiene l'uscita per quel giro;
+  `Initialize()` clampa z3/z2 entro FLT_MAX. Entrambe le classi.
+  Costo: +192 B flash su Uno, RAM invariata.
+- Guida alla taratura: claim b0 rafforzato con lo sweep misurato
+  (convergenza con ess nullo fino a b0 errata ±4×; degrado a ±8×).
 - Classe `ADRC1`: LADRC primo ordine per piante del tipo y' = f + b0·u
   (termiche, velocità, carichi RC). LESO a 2 stati (z1 = stima di y,
   z2 = disturbo), poli dell'osservatore doppi a −ωo, polo del controllore
