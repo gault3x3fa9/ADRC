@@ -1,0 +1,36 @@
+# Arduino build output
+build/
+bin/
+layout.json
+
+# Compilers and object files
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+host_test
+robustness_test
+benchmark
+usage_campaign
+
+# Generated test evidence (rerun the tools to recreate)
+extras/test/results/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+.clion/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

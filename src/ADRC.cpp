@@ -1,0 +1,179 @@
+#include "ADRC.h"
+#include <float.h>
+
+ADRC::ADRC(double* Input, double* Output, double* Setpoint,
+           double b0_val, double omega_c_val, double omega_o_val) {
+    myInput = Input;
+    myOutput = Output;
+    mySetpoint = Setpoint;
+    inAuto = false;
+    computing = false;
+
+    // Safe defaults first, so the object is always in a valid state even if
+    // the user-supplied tunings are rejected below.
+    b0 = 1.0f;
+    omega_c = 1.0f;
+    omega_o = 5.0f;
+    z1 = z2 = z3 = 0.0f;
+    outMin = 0.0f;
+    outMax = 255.0f;
+    sampleTimeUs = 10000UL;
+    dt = 0.010f;
+    updateGains();
+
+    lastTime = micros() - sampleTimeUs;
+    lastComputeUs = lastTime;
+
+    SetTunings(b0_val, omega_c_val, omega_o_val);
+}
+
+void ADRC::updateGains() {
+    invB0 = 1.0f / b0;
+
+    // Gao's bandwidth parameterisation (observer poles at -omega_o,
+    // controller poles at -omega_c)
+    beta1 = 3.0f * omega_o;
+    beta2 = 3.0f * omega_o * omega_o;
+    beta3 = omega_o * omega_o * omega_o;
+
+    Kp = omega_c * omega_c;
+    Kd = 2.0f * omega_c;
+}
+
+bool ADRC::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
+    // Reject NaN and +/-Inf outright (note: "x > 0" is TRUE for +Inf).
+    if (!isfinite(b0_val) || !isfinite(omega_c_val) || !isfinite(omega_o_val)) return false;
+    // b0 may be negative (reverse-acting plant) but not zero.
+    // The "!(x > 0)" form also rejects NaN.
+    if (!(omega_c_val > 0.0) || !(omega_o_val > 0.0)) return false;
+
+    // Values that survive only in double precision would still blow up the
+    // float internals: reject before they turn into Inf gains.
+    float b0f = (float)b0_val;
+    float wcf = (float)omega_c_val;
+    float wof = (float)omega_o_val;
+    if (b0f == 0.0f || !isfinite(b0f) || !isfinite(wcf) || !isfinite(wof)) return false;
+    // A subnormal b0 would make invB0 = 1/b0 overflow to Inf.
+    if (fabsf(b0f) < FLT_MIN) return false;
+
+    // Explicit-Euler LESO stability requires omega_o * dt <= 0.5. Tunings that
+    // violate it at the CURRENT sample time are rejected (call SetSampleTime
+    // with a shorter period first if you need a faster observer; it applies
+    // the same guard in the other direction).
+    if (wof * dt > 0.5f) return false;
+
+    b0 = b0f;
+    omega_c = wcf;
+    omega_o = wof;
+    updateGains();
+    return true;
+}
+
+void ADRC::SetSampleTime(unsigned long NewSampleTimeMs) {
+    // 0 is invalid; > ~71.6 min would overflow the microsecond conversion.
+    if (NewSampleTimeMs == 0 || NewSampleTimeMs > 4000000UL) return;
+    unsigned long newUs = NewSampleTimeMs * 1000UL;
+    // Keep the explicit-Euler observer stable: reject periods that would make
+    // omega_o * dt > 0.5 with the current tunings.
+    if (omega_o * ((float)newUs * 1e-6f) > 0.5f) return;
+    sampleTimeUs = newUs;
+    dt = (float)NewSampleTimeMs / 1000.0f;
+    lastTime = micros() - sampleTimeUs;   // resync to the new cadence
+}
+
+void ADRC::SetOutputLimits(double Min, double Max) {
+    // Non-finite limits would silently disable saturation.
+    if (!isfinite(Min) || !isfinite(Max)) return;
+    if (!(Min < Max)) return;
+    outMin = (float)Min;
+    outMax = (float)Max;
+
+    if (inAuto && myOutput) {
+        if (*myOutput > outMax) *myOutput = outMax;
+        else if (*myOutput < outMin) *myOutput = outMin;
+    }
+}
+
+void ADRC::SetMode(int Mode) {
+    bool newAuto = (Mode == AUTOMATIC);
+    if (newAuto && !inAuto) {
+        Initialize();
+    }
+    inAuto = newAuto;
+}
+
+void ADRC::Initialize() {
+    if (!myInput || !myOutput) return;   // never dereference a null pointer
+
+    float out = (float)*myOutput;
+    if (out > outMax) out = outMax;
+    else if (out < outMin) out = outMin;
+    *myOutput = out;
+
+    // Start the observer at the measured position, at rest, with the
+    // disturbance estimate that balances the current output
+    // (y'' = 0 = f + b0*u  ->  f = -b0*u). This makes the first control
+    // action continuous with the previous output (bumpless transfer).
+    z1 = (float)*myInput;
+    z2 = 0.0f;
+    z3 = -b0 * out;
+
+    lastTime = micros() - sampleTimeUs;
+    lastComputeUs = lastTime;
+}
+
+bool ADRC::IsObserverSafe() const {
+    return (omega_o * dt) <= 0.5f;
+}
+
+bool ADRC::Compute() {
+    if (!inAuto || computing) return false;          // reentrancy latch
+    if (!myInput || !myOutput || !mySetpoint) return false;
+
+    unsigned long now = micros();
+    unsigned long elapsed = now - lastTime;
+    if (elapsed < sampleTimeUs) return false;
+
+    // Real time since the last computation; fall back to the nominal dt if
+    // the loop stalled (a huge Euler step would destabilise the observer).
+    unsigned long real = now - lastComputeUs;
+    float stepDt = (real <= 2UL * sampleTimeUs) ? (float)real * 1e-6f : dt;
+    lastComputeUs = now;
+
+    // Drift-free scheduling; resynchronise if we fell badly behind.
+    if (elapsed < 2UL * sampleTimeUs) lastTime += sampleTimeUs;
+    else lastTime = now;
+
+    float y = (float)*myInput;
+    float r = (float)*mySetpoint;
+    if (!isfinite(y) || !isfinite(r)) return false;  // NaN/Inf: hold the output
+
+    float uPrev = (float)*myOutput;       // already saturated
+
+    computing = true;                     // state is mutated from here on
+
+    // 1. Observer error
+    float e = z1 - y;
+
+    // 2. LESO update (explicit Euler)
+    z1 += stepDt * (z2 - beta1 * e);
+    z2 += stepDt * (z3 - beta2 * e + b0 * uPrev);
+    z3 += stepDt * (-beta3 * e);
+
+    // 3. State-error feedback (PD on estimated states)
+    float u0 = Kp * (r - z1) - Kd * z2;
+
+    // 4. Disturbance compensation
+    float u = (u0 - z3) * invB0;
+
+    computing = false;
+
+    // 5. Saturation (NaN fails every comparison: hold the previous output
+    //    rather than write it to the actuator).
+    if (u > outMax) u = outMax;
+    else if (u < outMin) u = outMin;
+    else if (u != u) u = uPrev;
+
+    *myOutput = u;
+    return true;
+}
