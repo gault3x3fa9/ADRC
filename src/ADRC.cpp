@@ -455,9 +455,12 @@ bool ADRC1::Compute() {
 // ---------------------------------------------------------------------------
 // Han's fal: |e|^alpha * sign(e) outside the linear band delta,
 // e * (1/delta^(1-alpha)) inside. Odd, continuous, exactly linear for
-// alpha = 1 (the coefficient is 1 in that case).
+// alpha = 1 (the coefficient is 1 in that case). alpha == 1 returns e
+// directly: powf(x, 1.0f) is not guaranteed to be bit-exact on every libm
+// (1 ulp off is enough for the high-gain observer to drift apart) and
+// skipping it keeps the default profile bit-identical to ADRC everywhere.
 static float fal(float e, float alpha, float delta, float invDeltaPow) {
-    (void)alpha;                          // only used by the precomputed coeff
+    if (alpha == 1.0f) return e;               // exact identity, no powf
     float a = fabsf(e);
     if (a <= delta) return e * invDeltaPow;
     float r = powf(a, alpha);
@@ -504,9 +507,9 @@ void NLADRC::updateGains() {
 
 // 1/delta^(1-alpha) precomputed per profile so the linear band costs no powf
 void NLADRC::updateFalCoeffs() {
-    pow1c = 1.0f / powf(dCtrl, 1.0f - a1);
-    pow2c = 1.0f / powf(dCtrl, 1.0f - a2);
-    powO  = 1.0f / powf(dObs,  1.0f - ao);
+    pow1c = (a1 == 1.0f) ? 1.0f : 1.0f / powf(dCtrl, 1.0f - a1);
+    pow2c = (a2 == 1.0f) ? 1.0f : 1.0f / powf(dCtrl, 1.0f - a2);
+    powO  = (ao == 1.0f) ? 1.0f : 1.0f / powf(dObs,  1.0f - ao);
 }
 
 bool NLADRC::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
