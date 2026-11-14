@@ -3,7 +3,7 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
-## [1.2.0] — ramo feature/nladrc (sperimentale)
+## [1.2.0] — 2026-11-14
 
 ### Aggiunto
 - Classe `NLADRC`: variante non lineare di Han (fal su osservatore e
