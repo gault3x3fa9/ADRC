@@ -3,6 +3,16 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
+## [1.1.0] — in sviluppo
+
+### Aggiunto
+- `SetSetpointRamp(rate)` / `GetSetpointRamp()`: slew-limit del riferimento
+  interno (unità/s). Un gradone di setpoint diventa una rampa controllata;
+  0 = disattiva (default, comportamento invariato). Il riferimento rampato
+  riparte dall'Input corrente su `SetMode(AUTOMATIC)` (bumpless preservato).
+  Test: sezione 8 di `extras/test/host_test.cpp` (9 check).
+  Costo: +290 B flash, +9 B RAM su Uno.
+
 ## [1.0.0] — non ancora pubblicata
 
 ### Aggiunto

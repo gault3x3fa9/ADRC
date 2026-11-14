@@ -49,6 +49,40 @@ static Result runStep(double plantB, double b0, double wc, double wo, double sp)
     return r;
 }
 
+// Same plant/tuning as the nominal case, but with an optional setpoint
+// ramp: SetSetpointRamp(rate) limits the internal reference slew to
+// `rate` units/s (0 = disabled, the default). Records y at probeT seconds.
+static Result runRamp(double rate, double probeT, double* yProbe) {
+    double Setpoint = 20.0, Input = 0.0, Output = 0.0;
+    g_micros = 0;
+    ADRC c(&Input, &Output, &Setpoint, 10.0, 4.0, 25.0);
+    c.SetOutputLimits(-100.0, 100.0);
+    c.SetSampleTime(10);
+    if (rate > 0) c.SetSetpointRamp(rate);
+    c.SetMode(AUTOMATIC);
+    const double a1 = 1.5, a0 = 0.5, h = 0.001;
+    double pos = 0, vel = 0, peak = 0, settle = 0, devMax = 0;
+    for (long i = 0; i < 15000; i++) {
+        double t = i * h;
+        double dist = (t >= 5.0 && t < 10.0) ? -30.0 : 0.0;
+        vel += (-a1 * vel - a0 * pos + 10.0 * Output + dist) * h;
+        pos += vel * h;
+        g_micros = (unsigned long)(t * 1e6);
+        Input = pos;
+        c.Compute();
+        if (yProbe && fabs(t - probeT) < h / 2) *yProbe = pos;
+        if (t < 5.0) {
+            if (pos > peak) peak = pos;
+            if (fabs(pos - 20.0) > 0.4) settle = t;
+        } else if (t < 10.0) {
+            double d = fabs(pos - 20.0);
+            if (d > devMax) devMax = d;
+        }
+    }
+    Result r = { peak - 20.0, settle, devMax, fabs(pos - 20.0) };
+    return r;
+}
+
 int main() {
     // 1. Nominal tuning (same as examples/SimulatedSystem)
     Result n = runStep(10.0, 10.0, 4.0, 25.0, 20.0);
@@ -154,6 +188,42 @@ int main() {
         c.SetMode(AUTOMATIC);
         for (int k = 1; k <= 100; k++) { g_micros = 10000UL * k; c.Compute(); }
         CHECK(out <= 10.0 && out >= 0.0, "SetOutputLimits(+-Inf) ignored; old limits hold");
+    }
+
+    // 8. Setpoint ramp (V2): slew-limit the internal reference
+    {
+        double in = 0, out = 0, sp = 0;
+        ADRC c(&in, &out, &sp, 10, 4, 25);
+        CHECK(c.GetSetpointRamp() == 0.0, "ramp: disabled by default");
+        CHECK(!c.SetSetpointRamp(-5.0), "ramp: negative rate rejected");
+        CHECK(!c.SetSetpointRamp(NAN), "ramp: NaN rate rejected");
+        CHECK(c.GetSetpointRamp() == 0.0, "ramp: state unchanged after rejections");
+        CHECK(c.SetSetpointRamp(10.0), "ramp: positive rate accepted");
+
+        double yRamp = -1, yFree = -1;
+        Result rr = runRamp(10.0, 0.6, &yRamp);
+        Result rf = runRamp(0.0, 0.6, &yFree);
+        printf("ramp10 : y(0.6)=%.2f overshoot=%.3f settle=%.2fs maxDev=%.3f finalErr=%.4f\n",
+               yRamp, rr.overshoot, rr.settle, rr.maxDev, rr.finalErr);
+        printf("noramp : y(0.6)=%.2f overshoot=%.3f settle=%.2fs\n", yFree, rf.overshoot, rf.settle);
+        CHECK(yFree > yRamp + 3.0, "ramp: at t=0.6s the output is well below the free response");
+        CHECK(yRamp < 8.0, "ramp: y(0.6) tracks the 10 units/s reference");
+        CHECK(rr.overshoot < 0.2, "ramp: overshoot virtually eliminated");
+        CHECK(rr.finalErr < 0.05, "ramp: zero steady-state error");
+        CHECK(rr.maxDev < 1.0, "ramp: disturbance rejection unaffected");
+        CHECK(rr.settle > 1.5 && rr.settle < 4.5, "ramp: settles after the ramp completes (2 s), not before");
+    }
+    {
+        // ramp reference must not break bumpless MANUAL -> AUTOMATIC
+        double in = 5.0, out = 3.0, sp = 5.0;
+        g_micros = 1000000UL;
+        ADRC c(&in, &out, &sp, 10, 4, 25);
+        c.SetOutputLimits(-100, 100);
+        c.SetSetpointRamp(10);
+        c.SetMode(AUTOMATIC);
+        g_micros += 10000UL;
+        c.Compute();
+        CHECK(fabs(out - 3.0) < 0.01, "ramp: bumpless transfer still works");
     }
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);

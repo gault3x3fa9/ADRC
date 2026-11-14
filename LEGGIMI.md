@@ -94,6 +94,7 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 | `bool SetTunings(b0, ωc, ωo)` | Cambia la taratura al volo. Restituisce `false` senza modificare nulla per `b0 == 0`, valori subnormali o fuori range float, NaN/Inf, ω ≤ 0, oppure ωo · dt > 0.5 al tempo di campionamento attuale. |
 | `void SetSampleTime(ms)` | Periodo di campionamento (default 10 ms). 0, > 4000000, o valori che renderebbero ωo · dt > 0.5 vengono ignorati. |
 | `void SetOutputLimits(min, max)` | Saturazione. Limiti non finiti ignorati. L'osservatore usa l'uscita saturata, quindi non va in windup. Default 0..255: su sistemi bidirezionali imposta limiti simmetrici. |
+| `bool SetSetpointRamp(rate)`` | Limita la pendenza del riferimento interno, in (unità di input)/s: un cambiamento brusco del `Setpoint` diventa una rampa controllata (0 = disattivata, default). Restituisce `false` per rate negative o non finite. Con `SetMode(AUTOMATIC)` la rampa riparte dall'`Input` corrente (bumpless). `GetSetpointRamp()` la rilegge. |
 | `void SetMode(AUTOMATIC / MANUAL)` | Passando ad `AUTOMATIC` l'osservatore viene inizializzato da Input/Output correnti: **bumpless transfer**. |
 | `void Initialize()` | Reinizializza manualmente l'osservatore. |
 | `bool IsObserverSafe()` | `true` se ωo · dt ≤ 0.5. |
@@ -136,7 +137,7 @@ Tutte le evidenze sono generate dal codice reale della libreria tramite il siste
 
 - Modello di sistema del 2° ordine; niente termine integrale: l'errore a regime è eliminato dalla stima del disturbo.
 - Se modifichi `Output` fuori dalla libreria (zona morta, rimappature), l'osservatore continua a supporre che il valore letto da `Output` sia stato applicato. Mantieni `Output` uguale a ciò che l'attuatore riceve davvero.
-- I gradoni di setpoint saturano l'uscita; non c'è ancora una rampa di setpoint / tracking differentiator integrato.
+- I gradoni di setpoint saturano l'uscita; usa `SetSetpointRamp()` per trasformarli in una rampa controllata (un tracking differentiator completo non è ancora implementato).
 - I sistemi con **ritardo dominante** (riscaldatori, tubi lunghi) richiedono un ωo basso — limite sicuro misurato: **ωo ≤ ~0.75 / tempo-di-ritardo**; sopra, l'osservatore inizia a oscillare. Lì un PID classico è di solito lo strumento migliore.
 - I calcoli interni usano `float`; sulle schede AVR a 8 bit `double` ha comunque la stessa dimensione.
 - Il campionamento usa `micros()`; la prima chiamata dopo `SetMode(AUTOMATIC)` esegue subito il calcolo.

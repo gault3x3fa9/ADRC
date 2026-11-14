@@ -69,6 +69,16 @@ public:
     // (e.g. -255..255) or the controller has no authority in one direction.
     void SetOutputLimits(double Min, double Max);
 
+    // Slew-limit the internal reference, in (input units)/s. With a ramp
+    // set, an abrupt change of *Setpoint produces a controlled ramp instead
+    // of a step: useful when a large step would saturate the output or
+    // stress the actuator. 0 disables the ramp (default). Returns false
+    // (and changes nothing) for negative or non-finite rates. The ramped
+    // reference restarts from the current Input on SetMode(AUTOMATIC),
+    // so bumpless transfer is preserved.
+    bool SetSetpointRamp(double unitsPerSecond);
+    double GetSetpointRamp() const { return rampRate; }
+
     // AUTOMATIC / MANUAL. Switching to AUTOMATIC re-initialises the observer
     // from the current Input and Output (bumpless transfer).
     void SetMode(int Mode);
@@ -105,6 +115,10 @@ private:
 
     // LESO states
     float z1, z2, z3;
+
+    // Setpoint ramp (0 = disabled)
+    float rampRate, rEff;
+    bool rEffValid;
 
     // Reentrancy latch (see Compute)
     bool computing;

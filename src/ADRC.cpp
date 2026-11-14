@@ -15,6 +15,9 @@ ADRC::ADRC(double* Input, double* Output, double* Setpoint,
     omega_c = 1.0f;
     omega_o = 5.0f;
     z1 = z2 = z3 = 0.0f;
+    rampRate = 0.0f;
+    rEff = 0.0f;
+    rEffValid = false;
     outMin = 0.0f;
     outMax = 255.0f;
     sampleTimeUs = 10000UL;
@@ -94,6 +97,15 @@ void ADRC::SetOutputLimits(double Min, double Max) {
     }
 }
 
+bool ADRC::SetSetpointRamp(double rate) {
+    // 0 = disabled; negative or non-finite rates are rejected outright
+    if (!isfinite(rate) || rate < 0.0) return false;
+    float rf = (float)rate;
+    if (!isfinite(rf)) return false;          // beyond float range
+    rampRate = rf;
+    return true;
+}
+
 void ADRC::SetMode(int Mode) {
     bool newAuto = (Mode == AUTOMATIC);
     if (newAuto && !inAuto) {
@@ -117,6 +129,11 @@ void ADRC::Initialize() {
     z1 = (float)*myInput;
     z2 = 0.0f;
     z3 = -b0 * out;
+
+    // Ramped reference restarts from the current measurement: bumpless
+    // (the first control action is unchanged) and no reference jump.
+    rEff = (float)*myInput;
+    rEffValid = true;
 
     lastTime = micros() - sampleTimeUs;
     lastComputeUs = lastTime;
@@ -148,6 +165,20 @@ bool ADRC::Compute() {
     float r = (float)*mySetpoint;
     if (!isfinite(y) || !isfinite(r)) return false;  // NaN/Inf: hold the output
 
+    // Ramped reference: slew-limit r toward the setpoint (0 = passthrough)
+    if (rampRate > 0.0f) {
+        if (!rEffValid) { rEff = r; rEffValid = true; }
+        else {
+            float delta = r - rEff;
+            float step = rampRate * stepDt;
+            if (delta > step)       rEff += step;
+            else if (delta < -step) rEff -= step;
+            else                    rEff = r;
+        }
+    } else {
+        rEff = r;
+    }
+
     float uPrev = (float)*myOutput;       // already saturated
 
     computing = true;                     // state is mutated from here on
@@ -160,8 +191,8 @@ bool ADRC::Compute() {
     z2 += stepDt * (z3 - beta2 * e + b0 * uPrev);
     z3 += stepDt * (-beta3 * e);
 
-    // 3. State-error feedback (PD on estimated states)
-    float u0 = Kp * (r - z1) - Kd * z2;
+    // 3. State-error feedback (PD on estimated states, on the ramped ref)
+    float u0 = Kp * (rEff - z1) - Kd * z2;
 
     // 4. Disturbance compensation
     float u = (u0 - z3) * invB0;

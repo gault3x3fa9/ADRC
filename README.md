@@ -94,6 +94,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 | `bool SetTunings(b0, ωc, ωo)` | Change tunings on the fly. Returns `false` and changes nothing for `b0 == 0`, subnormal or out-of-float-range values, NaN/Inf, ω ≤ 0, or ωo · dt > 0.5 at the current sample time. |
 | `void SetSampleTime(ms)` | Sampling period (default 10 ms). 0, > 4000000, or values that would make ωo · dt > 0.5 are ignored. |
 | `void SetOutputLimits(min, max)` | Saturation. Non-finite limits are ignored. The observer uses the saturated output, so it does not wind up. Default 0..255: on signed (bidirectional) plants set symmetric limits. |
+| `bool SetSetpointRamp(rate)` | Slew-limit the internal reference, in (input units)/s: an abrupt `Setpoint` change becomes a controlled ramp (0 = disabled, default). Returns `false` for negative or non-finite rates. On `SetMode(AUTOMATIC)` the ramp restarts from the current `Input` (bumpless). `GetSetpointRamp()` reads it back. |
 | `void SetMode(AUTOMATIC / MANUAL)` | Switching to `AUTOMATIC` initialises the observer from the current Input/Output: **bumpless transfer**. |
 | `void Initialize()` | Re-initialise the observer manually. |
 | `bool IsObserverSafe()` | `true` if ωo · dt ≤ 0.5. |
@@ -136,7 +137,7 @@ All evidence is generated from the real library code by the host test system in 
 
 - 2nd-order plant model; no integrator term: steady-state error is removed by the disturbance estimate.
 - If you modify `Output` outside the library (deadband, remapping), the observer still assumes the value it read from `Output` was applied. Keep `Output` equal to what the actuator really receives.
-- Large setpoint steps saturate the output; there is no built-in setpoint ramp / tracking differentiator.
+- Large setpoint steps saturate the output; use `SetSetpointRamp()` to turn them into a controlled ramp (a full tracking differentiator is still not implemented).
 - Plants with **dominant dead time** (heaters, long pipes) need a low ωo — measured safe bound: **ωo ≤ ~0.75 / dead-time**; above that the observer starts oscillating. A classic PID is usually the better tool there.
 - Internal maths uses `float`; on 8-bit AVR boards `double` is the same size anyway.
 - Scheduling uses `micros()`; the first call after `SetMode(AUTOMATIC)` runs immediately.
