@@ -24,7 +24,7 @@ Dati di un sistema simulato: su hardware reale i risultati cambiano (rumore del 
 
 ## Quando usare l'ADRC (e quando no)
 
-L'ADRC tende a battere il PID quando il sistema ha inerzia (posizione/velocità di motori, gimbal, robot bilancianti) e quando carico o attrito cambiano durante il funzionamento: l'osservatore reagisce all'*effetto* del disturbo senza un modello di quest'ultimo. Servono una stima approssimativa di **b0**, una misura ragionevolmente pulita e veloce, e un sistema che si comporti più o meno come un 2° ordine. Per processi lenti del 1° ordine un PID ben tarato può andare altrettanto bene ed è più semplice; su sistemi con ritardo dominante il PID è di solito la scelta migliore (vedi *Limiti*).
+L'ADRC tende a battere il PID quando il sistema ha inerzia (posizione/velocità di motori, gimbal, robot bilancianti) e quando carico o attrito cambiano durante il funzionamento: l'osservatore reagisce all'*effetto* del disturbo senza un modello di quest'ultimo. Servono una stima approssimativa di **b0**, una misura ragionevolmente pulita e veloce, e un sistema che si comporti più o meno come un 2° ordine. Per i processi lenti del 1° ordine (termici, controllo di velocità) usa la classe `ADRC1`: sulla pianta primo-ordine + tempo morto del benchmark batte sia il PID classico sia l'ADRC di 2° ordine (vedi *Risultati misurati*).
 
 ## ADRC o ADRC1 — quale usare?
 
@@ -137,7 +137,7 @@ Tutte le evidenze sono generate dal codice reale della libreria tramite il siste
 | Peltier, b0 < 0 | overshoot 1.7 %, errore nullo, rigetto carico immediato |
 | Tracking onda quadra (6 inversioni) | peggiore overshoot 0.23 %, peggiore assestamento 1.3 s |
 
-**Benchmark ADRC vs PID** (entrambi tarati dalla stessa grid-search automatica): su piante del 2° ordine tipo motore, stessa velocità nominale di un PID ottimizzato, **2–8× meno overshoot** quando la pianta cambia e **~50–120× meno jitter dell'attuatore** con rumore del sensore al 2 %. Sulla pianta 1° ordine + tempo morto vince il PID (limitazione LADRC nota).
+**Benchmark ADRC vs PID** (entrambi tarati dalla stessa grid-search automatica): su piante del 2° ordine tipo motore, stessa velocità nominale di un PID ottimizzato, **2–8× meno overshoot** quando la pianta cambia e **~50–120× meno jitter dell'attuatore** con rumore del sensore al 2 %. Sulla pianta 1° ordine + tempo morto l'ADRC di 2° ordine soffre (limitazione LADRC nota), ma **`ADRC1` batte il PID anche lì**: assestamento 1.48 s vs 1.73 s, overshoot 0.6 % vs 8.7 %, ess nullo, e con guadagno pianta raddoppiato 4.9 % vs 17.6 % di overshoot.
 
 **CPU / ingombro, Arduino Uno R3 @ 16 MHz** (cross-validato simavr ↔ Wokwi cloud entro lo 0.06 %):
 
@@ -152,7 +152,7 @@ Tutte le evidenze sono generate dal codice reale della libreria tramite il siste
 - Modello di sistema del 2° ordine; niente termine integrale: l'errore a regime è eliminato dalla stima del disturbo.
 - Se modifichi `Output` fuori dalla libreria (zona morta, rimappature), l'osservatore continua a supporre che il valore letto da `Output` sia stato applicato. Mantieni `Output` uguale a ciò che l'attuatore riceve davvero.
 - I gradoni di setpoint saturano l'uscita; usa `SetSetpointRamp()` per trasformarli in una rampa controllata (un tracking differentiator completo non è ancora implementato).
-- I sistemi con **ritardo dominante** (riscaldatori, tubi lunghi) richiedono un ωo basso — limite sicuro misurato: **ωo ≤ ~0.75 / tempo-di-ritardo**; sopra, l'osservatore inizia a oscillare. Lì un PID classico è di solito lo strumento migliore.
+- I sistemi con **ritardo dominante** (riscaldatori, tubi lunghi) calzano male all'`ADRC` di 2° ordine: richiede un ωo basso (limite sicuro misurato: **ωo ≤ ~0.75 / tempo-di-ritardo**) e resta un errore a regime. Usa lì la **`ADRC1`** — misurato sulla pianta con tempo morto del benchmark batte un PID tarato (1.48 s vs 1.73 s di assestamento, 0.6 % vs 8.7 % di overshoot, ess nullo).
 - I calcoli interni usano `float`; sulle schede AVR a 8 bit `double` ha comunque la stessa dimensione.
 - Il campionamento usa `micros()`; la prima chiamata dopo `SetMode(AUTOMATIC)` esegue subito il calcolo.
 

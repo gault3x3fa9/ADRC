@@ -24,7 +24,7 @@ Simulated plant; real hardware will differ (sensor noise, quantisation, actuator
 
 ## When to use ADRC (and when not to)
 
-ADRC tends to beat PID when the plant has inertia (motor position/speed, gimbals, balancing robots) and when load or friction change while running: the observer reacts to the *effect* of a disturbance without a model of it. You need a rough estimate of **b0**, a reasonably clean and fast measurement, and a plant that behaves roughly like a 2nd-order system. For slow, first-order processes a well-tuned PID can be just as good and simpler; on plants with dominant dead time a PID is usually the better choice (see *Limitations*).
+ADRC tends to beat PID when the plant has inertia (motor position/speed, gimbals, balancing robots) and when load or friction change while running: the observer reacts to the *effect* of a disturbance without a model of it. You need a rough estimate of **b0**, a reasonably clean and fast measurement, and a plant that behaves roughly like a 2nd-order system. For slow, first-order processes (thermal systems, speed control) use the `ADRC1` class: on the benchmark's first-order + dead-time plant it beats both the classic PID and the 2nd-order ADRC (see *Measured results*).
 
 ## ADRC or ADRC1 — which one?
 
@@ -137,7 +137,7 @@ All evidence is generated from the real library code by the host test system in 
 | Peltier, b0 < 0 | overshoot 1.7 %, error 0, load rejection immediate |
 | Square-wave tracking (6 reversals) | worst overshoot 0.23 %, worst settling 1.3 s |
 
-**ADRC vs PID benchmark** (both tuned by the same automatic grid search): on 2nd-order motor-like plants, same nominal speed as an optimally tuned PID, **2–8× less overshoot** when the plant changes, and **~50–120× less actuator jitter** with 2 % sensor noise. On a first-order + dead-time plant the PID wins (known LADRC limitation).
+**ADRC vs PID benchmark** (both tuned by the same automatic grid search): on 2nd-order motor-like plants, same nominal speed as an optimally tuned PID, **2–8× less overshoot** when the plant changes, and **~50–120× less actuator jitter** with 2 % sensor noise. On the first-order + dead-time plant the 2nd-order ADRC struggles (known LADRC limitation), but **`ADRC1` beats the PID there too**: settling 1.48 s vs 1.73 s, overshoot 0.6 % vs 8.7 %, ess 0, and with a doubled plant gain 4.9 % vs 17.6 % overshoot.
 
 **CPU / footprint, Arduino Uno R3 @ 16 MHz** (cross-validated simavr ↔ Wokwi cloud within 0.06 %):
 
@@ -152,7 +152,7 @@ All evidence is generated from the real library code by the host test system in 
 - 2nd-order plant model; no integrator term: steady-state error is removed by the disturbance estimate.
 - If you modify `Output` outside the library (deadband, remapping), the observer still assumes the value it read from `Output` was applied. Keep `Output` equal to what the actuator really receives.
 - Large setpoint steps saturate the output; use `SetSetpointRamp()` to turn them into a controlled ramp (a full tracking differentiator is still not implemented).
-- Plants with **dominant dead time** (heaters, long pipes) need a low ωo — measured safe bound: **ωo ≤ ~0.75 / dead-time**; above that the observer starts oscillating. A classic PID is usually the better tool there.
+- Plants with **dominant dead time** (heaters, long pipes) are a poor fit for the 2nd-order `ADRC`: it needs a low ωo (measured safe bound: **ωo ≤ ~0.75 / dead-time**) and still shows steady-state lag. Use **`ADRC1`** there — measured on the benchmark dead-time plant it beats a tuned PID (1.48 s vs 1.73 s settling, 0.6 % vs 8.7 % overshoot, zero ess).
 - Internal maths uses `float`; on 8-bit AVR boards `double` is the same size anyway.
 - Scheduling uses `micros()`; the first call after `SetMode(AUTOMATIC)` runs immediately.
 

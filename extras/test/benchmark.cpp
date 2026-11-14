@@ -10,7 +10,7 @@
 //     the library default sample time (10 ms), like the real examples.
 //
 // Build (host):
-//   python -m ziglang cc -O2 -Wall -I extras/test/stub -I src \
+//   python -m ziglang cc -O2 -Wall -I extras/test/stub -I src
 //       extras/test/benchmark.cpp src/ADRC.cpp -o extras/test/benchmark.exe
 //   (or g++ -O2 -Wall -I extras/test/stub -I src extras/test/benchmark.cpp src/ADRC.cpp -o benchmark)
 //
@@ -89,21 +89,27 @@ static const double T_END  = 15.0;
 static const double T_DIST_ON = 5.0, T_DIST_OFF = 10.0;
 static const double SP = 20.0, DIST = -30.0;
 
-// Runs one scenario. ctrl: 0 = ADRC, 1 = PID. noise_sigma: 0 = off.
+// Runs one scenario. ctrl: 0 = ADRC, 1 = PID, 2 = ADRC1. noise_sigma: 0 = off.
 static Metrics runScenario(const Plant& p, int ctrl,
                            double p1, double p2, double p3,
                            double noiseSigma, unsigned* seed) {
     double Setpoint = SP, Input = 0.0, Output = 0.0;
     g_micros = 0;
 
-    ADRC adrc(&Input, &Output, &Setpoint, 1, 1, 5);
-    PID  pid(&Input, &Output, &Setpoint, p1, p2, p3);
+    ADRC  adrc(&Input, &Output, &Setpoint, 1, 1, 5);
+    ADRC1 adrc1(&Input, &Output, &Setpoint, 1, 1, 5);
+    PID   pid(&Input, &Output, &Setpoint, p1, p2, p3);
     const double dt = 0.010;
     if (ctrl == 0) {
         adrc.SetOutputLimits(-100, 100);
         adrc.SetSampleTime(10);
         adrc.SetTunings(p1, p2, p3);
         adrc.SetMode(AUTOMATIC);
+    } else if (ctrl == 2) {
+        adrc1.SetOutputLimits(-100, 100);
+        adrc1.SetSampleTime(10);
+        adrc1.SetTunings(p1, p2, p3);
+        adrc1.SetMode(AUTOMATIC);
     } else {
         pid.configure(dt, -100, 100);
     }
@@ -146,8 +152,9 @@ static Metrics runScenario(const Plant& p, int ctrl,
 
         Input = meas;
         g_micros = (unsigned long)(t * 1e6);
-        if (ctrl == 0) adrc.Compute();
-        else           pid.compute();
+        if (ctrl == 0)      adrc.Compute();
+        else if (ctrl == 2) adrc1.Compute();
+        else                pid.compute();
 
         // metrics
         double e = SP - y;
@@ -197,6 +204,24 @@ static Tuning tuneADRC(const Plant& p) {
             for (double k = 3; k <= 8.0001 && wc * k <= 50; k += 1.0) {  // wo<=50 keeps wo*dt<=0.5
                 unsigned seed = 1;
                 Metrics m = runScenario(p, 0, b0, wc, wc * k, 0, &seed);
+                if (m.unstable || m.overshoot > 10.0) continue;
+                double score = -m.itae;
+                if (!found || score > best.score) { best.p1 = b0; best.p2 = wc; best.p3 = wc * k; best.score = score; found = true; }
+            }
+    best.ok = found;
+    return best;
+}
+
+static Tuning tuneADRC1(const Plant& p) {
+    Tuning best;
+    bool found = false;
+    double bBase = p.b / p.tau;           // K/tau: the natural first-order b0
+    double b0s[] = { bBase, bBase * 0.5, bBase * 2.0 };
+    for (double b0 : b0s)
+        for (double wc = 0.5; wc <= 16.0001; wc *= 1.3)
+            for (double k = 3; k <= 8.0001 && wc * k <= 50; k += 1.0) {
+                unsigned seed = 1;
+                Metrics m = runScenario(p, 2, b0, wc, wc * k, 0, &seed);
                 if (m.unstable || m.overshoot > 10.0) continue;
                 double score = -m.itae;
                 if (!found || score > best.score) { best.p1 = b0; best.p2 = wc; best.p3 = wc * k; best.score = score; found = true; }
@@ -256,25 +281,37 @@ int main() {
         printf("=== %s ===\n", p.name);
         Tuning ta = tuneADRC(p);
         Tuning tp = tunePID(p);
+        Tuning t1 = {};                       // ADRC1, first-order plants only
+        bool useADRC1 = (p.order == 1);
+        if (useADRC1) t1 = tuneADRC1(p);
         if (!ta.ok) { printf("ADRC tuning failed\n"); FAIL("ADRC tuning"); continue; }
         if (!tp.ok) { printf("PID tuning failed\n"); FAIL("PID tuning"); continue; }
+        if (useADRC1 && !t1.ok) { printf("ADRC1 tuning failed\n"); FAIL("ADRC1 tuning"); continue; }
         printf("ADRC tuning: b0=%.2g wc=%.1f wo=%.1f   (ITAE=%.2f)\n", ta.p1, ta.p2, ta.p3, -ta.score);
+        if (useADRC1)
+            printf("ADRC1 tuning: b0=%.2g wc=%.1f wo=%.1f   (ITAE=%.2f)\n", t1.p1, t1.p2, t1.p3, -t1.score);
         printf("PID  tuning: Kp=%.2g Ki=%.2g Kd=%.2g   (ITAE=%.2f)\n", tp.p1, tp.p2, tp.p3, -tp.score);
 
         printf("%-14s %7s %8s %7s %9s %11s %9s %7s %8s\n",
                "scenario", "rise", "over%", "settle", "devDist", "ITAE", "uEffort", "uMax", "ess");
-        unsigned seedA = 7, seedP = 7;
+        unsigned seedA = 7, seedP = 7, seed1 = 7;
 
         // nominal
         printRow("ADRC nominal", runScenario(p, 0, ta.p1, ta.p2, ta.p3, 0, &seedA));
+        if (useADRC1)
+            printRow("ADRC1 nominal", runScenario(p, 2, t1.p1, t1.p2, t1.p3, 0, &seed1));
         printRow("PID  nominal", runScenario(p, 1, tp.p1, tp.p2, tp.p3, 0, &seedP));
 
         // plant perturbations (never shown to the tuner)
         Plant q = p; q.b = p.b * 0.5;
         printRow("ADRC gain x0.5", runScenario(q, 0, ta.p1, ta.p2, ta.p3, 0, &seedA));
+        if (useADRC1)
+            printRow("ADRC1 gain x0.5", runScenario(q, 2, t1.p1, t1.p2, t1.p3, 0, &seed1));
         printRow("PID  gain x0.5", runScenario(q, 1, tp.p1, tp.p2, tp.p3, 0, &seedP));
         q = p; q.b = p.b * 2.0;
         printRow("ADRC gain x2",   runScenario(q, 0, ta.p1, ta.p2, ta.p3, 0, &seedA));
+        if (useADRC1)
+            printRow("ADRC1 gain x2", runScenario(q, 2, t1.p1, t1.p2, t1.p3, 0, &seed1));
         printRow("PID  gain x2",   runScenario(q, 1, tp.p1, tp.p2, tp.p3, 0, &seedP));
         if (p.order == 2) {
             q = p; q.a1 = 0.0;   // friction disappears
@@ -292,9 +329,15 @@ int main() {
         Metrics mnA = runScenario(p, 0, ta.p1, ta.p2, ta.p3, 0.02, &seedA);
         Metrics mnP = runScenario(p, 1, tp.p1, tp.p2, tp.p3, 0.02, &seedP);
         printRow("ADRC noise", mnA);
-        printRow("PID  noise", mnP);
-        printf("   output jitter per sample: ADRC %.3f  PID %.3f  (actuator-wear proxy)\n",
-               mnA.noiseDu, mnP.noiseDu);
+        if (useADRC1) {
+            Metrics mn1 = runScenario(p, 2, t1.p1, t1.p2, t1.p3, 0.02, &seed1);
+            printRow("ADRC1 noise", mn1);
+            printf("   output jitter per sample: ADRC1 %.3f  ADRC %.3f  PID %.3f\n",
+                   mn1.noiseDu, mnA.noiseDu, mnP.noiseDu);
+        } else {
+            printf("   output jitter per sample: ADRC %.3f  PID %.3f  (actuator-wear proxy)\n",
+                   mnA.noiseDu, mnP.noiseDu);
+        }
         printf("   y std-dev at setpoint:    ADRC %.4f  PID %.4f\n\n", mnA.noiseY, mnP.noiseY);
 
         // sanity assertions (the library's declared domain: 2nd-order plants)
@@ -304,8 +347,8 @@ int main() {
             if (nomA.settle2 > 3.0) FAIL("ADRC nominal too slow");
             if (nomA.ess > 0.05) FAIL("ADRC nonzero ess");
         } else if (nomA.ess > 0.1 || nomA.settle2 >= 4.99) {
-            printf("NOTE: %s - ADRC shows large ess/settling on this dead-time plant\n"
-                   "      (known LADRC limitation; keep omega_o low or add delay compensation)\n", p.name);
+            printf("NOTE: %s - the 2nd-order ADRC shows large ess/settling here;\n"
+                   "      for first-order + dead-time plants use ADRC1 (rows above)\n", p.name);
         }
     }
 

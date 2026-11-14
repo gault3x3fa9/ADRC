@@ -15,6 +15,11 @@ Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
   vs 4.6%, disturbo 0.030 vs 0.043 rispetto ad `ADRC`. Il codice non
   referenziato non costa flash su Uno (7318 B invariati).
   Test: sezione 10 di `extras/test/host_test.cpp` (15 check).
+- Benchmark: aggiunto `ADRC1` alla pianta P3 (1° ordine + tempo morto)
+  con la stessa grid-search degli altri controllori. Esito: ADRC1 batte
+  PID e ADRC-2 (ITAE 6.90 vs 7.17 vs 43.4; assestamento 1.48 s vs
+  1.73 s vs 5.0 s; jitter 0.006 vs 92 vs 3.8). Il claim "sul tempo
+  morto vince il PID" è ritirato dalle docs.
 - `SetInputFilter(hz)` / `GetInputFilter()`: filtro passa-basso a un polo
   sulla misura (prima dell'osservatore), cutoff in Hz. Guadagno DC 1
   (nessun bias a regime). Misurato: rumore sigma=0.05 con omega_o=40 →
