@@ -135,6 +135,44 @@ static Result runNoise(double filterHz, unsigned seed, double* jitter) {
     return r;
 }
 
+// First-order plant for ADRC1 tests: y' = (-y + K*u)/tau + d (deviation
+// form around ambient 25). Controller sampled at Ts, plant at h.
+static Result runFirstOrder(bool useAdrc1, double b0, double wc, double wo,
+                            double probeT, double* yProbe) {
+    double Setpoint = 55.0, Input = 25.0, Output = 0.0;
+    g_micros = 0;
+    ADRC c2(&Input, &Output, &Setpoint, b0, wc, wo);
+    ADRC1 c1(&Input, &Output, &Setpoint, b0, wc, wo);
+    ADRC* c = useAdrc1 ? (ADRC*)nullptr : &c2;   // dispatch below via flag
+    (void)c;
+    const double K = 0.6, tau = 25.0, h = 0.01;
+    double y = 25.0, peak = 25.0, settle = 0, devMax = 0;
+    // same limits/sample time/mode for both controller kinds
+    c2.SetOutputLimits(0.0, 100.0); c1.SetOutputLimits(0.0, 100.0);
+    c2.SetSampleTime(100);          c1.SetSampleTime(100);
+    c2.SetMode(AUTOMATIC);          c1.SetMode(AUTOMATIC);
+    for (long i = 0; i < 12000; i++) {            // 120 s @ 10 ms
+        double t = i * h;
+        double d = (t >= 60.0 && t < 80.0) ? -0.04 : 0.0;
+        double x = y - 25.0;
+        x += ((-x + K * Output) / tau + d) * h;
+        y = x + 25.0;
+        g_micros = (unsigned long)(t * 1e6);
+        Input = y;
+        if (useAdrc1) c1.Compute(); else c2.Compute();
+        if (yProbe && fabs(t - probeT) < h / 2) *yProbe = y;
+        if (t < 60.0) {
+            if (y > peak) peak = y;
+            if (fabs(y - 55.0) > 0.6) settle = t;
+        } else if (t < 80.0) {
+            double dd = fabs(y - 55.0);
+            if (dd > devMax) devMax = dd;
+        }
+    }
+    Result r = { peak - 55.0, settle, devMax, fabs(y - 55.0) };
+    return r;
+}
+
 int main() {
     // 1. Nominal tuning (same as examples/SimulatedSystem)
     Result n = runStep(10.0, 10.0, 4.0, 25.0, 20.0);
@@ -352,6 +390,62 @@ int main() {
                   "filter: Inf glitch still held, output finite and clamped");
             CHECK(fabs(pos - 20) < 1.0, "filter: loop still settles after the glitch");
         }
+    }
+
+    // 10. ADRC1: first-order LADRC (V2) for thermal/speed-like plants
+    {
+        // 10a. nominal step + disturbance on a first-order plant
+        Result f1 = runFirstOrder(true, 0.024, 0.5, 1.5, -1, nullptr);
+        printf("ADRC1 : overshoot=%.3f settle=%.2fs maxDev=%.4f finalErr=%.4f\n",
+               f1.overshoot, f1.settle, f1.maxDev, f1.finalErr);
+        CHECK(f1.finalErr < 0.05, "ADRC1: zero steady-state error on 1st-order plant");
+        CHECK(f1.settle > 0.5 && f1.settle < 45.0, "ADRC1: settles in a sane window");
+        CHECK(f1.overshoot < 1.5, "ADRC1: low overshoot (< 5% of step)");
+        CHECK(f1.maxDev < 0.6, "ADRC1: disturbance rejected (dev < 2% of step)");
+
+        // 10b. same plant, same tuning idea, second-order ADRC as a contrast:
+        // both must at least converge (ADRC1 expected smoother)
+        Result f2 = runFirstOrder(false, 0.024, 0.5, 1.5, -1, nullptr);
+        printf("ADRC2 : overshoot=%.3f settle=%.2fs maxDev=%.4f finalErr=%.4f\n",
+               f2.overshoot, f2.settle, f2.maxDev, f2.finalErr);
+        CHECK(f2.finalErr < 0.05, "ADRC (2nd) still converges on the 1st-order plant");
+
+        // 10c. validation and guards mirror the ADRC contract
+        double in = 0, out = 0, sp = 0;
+        ADRC1 c(&in, &out, &sp, 0.0, -1.0, 0.0);     // all invalid
+        CHECK(c.GetB0() != 0.0 && c.GetOmegaC() > 0.0 && c.GetOmegaO() > 0.0,
+              "ADRC1: invalid constructor args leave a safe state");
+        CHECK(!c.SetTunings(0.0, 4.0, 25.0), "ADRC1: SetTunings rejects b0 == 0");
+        CHECK(!c.SetTunings(10.0, 4.0, 100.0), "ADRC1: SetTunings rejects unsafe omega_o");
+        CHECK(c.SetTunings(-10.0, 4.0, 25.0), "ADRC1: negative b0 accepted");
+        CHECK(c.IsObserverSafe(), "ADRC1: observer guard available");
+
+        // 10d. bumpless MANUAL -> AUTOMATIC
+        {
+            double in2 = 5.0, out2 = 3.0, sp2 = 5.0;
+            g_micros = 1000000UL;
+            ADRC1 b(&in2, &out2, &sp2, 10, 4, 25);
+            b.SetOutputLimits(-100, 100);
+            b.SetMode(AUTOMATIC);
+            g_micros += 10000UL;
+            b.Compute();
+            CHECK(fabs(out2 - 3.0) < 0.01, "ADRC1: bumpless transfer");
+        }
+
+        // 10e. ramp + filter available on ADRC1 as well
+        {
+            double in3 = 0, out3 = 0, sp3 = 0;
+            ADRC1 r(&in3, &out3, &sp3, 10, 4, 25);
+            CHECK(r.SetSetpointRamp(5.0), "ADRC1: SetSetpointRamp accepted");
+            CHECK(r.GetSetpointRamp() == 5.0, "ADRC1: ramp rate readable");
+            CHECK(r.SetInputFilter(2.0), "ADRC1: SetInputFilter accepted");
+            CHECK(r.GetInputFilter() == 2.0, "ADRC1: filter cutoff readable");
+        }
+
+        // 10f. null pointers safe
+        ADRC1 n(nullptr, nullptr, nullptr, 10, 4, 25);
+        g_micros = 20000;
+        CHECK(n.Compute() == false, "ADRC1: null pointers, no crash");
     }
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);

@@ -26,6 +26,19 @@ Dati di un sistema simulato: su hardware reale i risultati cambiano (rumore del 
 
 L'ADRC tende a battere il PID quando il sistema ha inerzia (posizione/velocità di motori, gimbal, robot bilancianti) e quando carico o attrito cambiano durante il funzionamento: l'osservatore reagisce all'*effetto* del disturbo senza un modello di quest'ultimo. Servono una stima approssimativa di **b0**, una misura ragionevolmente pulita e veloce, e un sistema che si comporti più o meno come un 2° ordine. Per processi lenti del 1° ordine un PID ben tarato può andare altrettanto bene ed è più semplice; su sistemi con ritardo dominante il PID è di solito la scelta migliore (vedi *Limiti*).
 
+## ADRC o ADRC1 — quale usare?
+
+`ADRC` assume una pianta del 2° ordine (`y'' = f + b0·u`): motori, servomeccanismi di posizione, robot bilancianti. `ADRC1` assume una pianta del 1° ordine (`y' = f + b0·u`): sistemi termici, velocità di ruota/ventola, carichi RC. Stessa API, stesse guardie e funzionalità (rampa, filtro, bumpless, saturazione); `GetZ2()` restituisce la stima del disturbo.
+
+Stessa pianta del 1° ordine, stessi parametri di tuning (b0=K/τ, ωc=0.5, ωo=1.5):
+
+| | assestamento | overshoot | incasso disturbo |
+|---|---|---|---|
+| `ADRC1` | **18.4 s** | **0.0 %** | **0.030** |
+| `ADRC` (2°) | 32.3 s | 4.6 % | 0.043 |
+
+Regola pratica: se l'attuatore accelera la grandezza che misuri, usa `ADRC`; se ne spinge direttamente la velocità di variazione, usa `ADRC1`.
+
 ## Installazione
 
 - **Arduino IDE → Gestore librerie**: cerca "ADRC" *(una volta pubblicata)*.

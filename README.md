@@ -26,6 +26,19 @@ Simulated plant; real hardware will differ (sensor noise, quantisation, actuator
 
 ADRC tends to beat PID when the plant has inertia (motor position/speed, gimbals, balancing robots) and when load or friction change while running: the observer reacts to the *effect* of a disturbance without a model of it. You need a rough estimate of **b0**, a reasonably clean and fast measurement, and a plant that behaves roughly like a 2nd-order system. For slow, first-order processes a well-tuned PID can be just as good and simpler; on plants with dominant dead time a PID is usually the better choice (see *Limitations*).
 
+## ADRC or ADRC1 — which one?
+
+`ADRC` assumes a 2nd-order plant (`y'' = f + b0·u`): motors, position servos, balancing robots. `ADRC1` assumes a 1st-order plant (`y' = f + b0·u`): thermal systems, wheel/fan speed, RC loads. Same API, guards and features (ramp, filter, bumpless, saturation); `GetZ2()` returns the disturbance estimate.
+
+Same first-order plant, same tuning parameters (b0=K/τ, ωc=0.5, ωo=1.5):
+
+| | settling | overshoot | disturbance dip |
+|---|---|---|---|
+| `ADRC1` | **18.4 s** | **0.0 %** | **0.030** |
+| `ADRC` (2nd) | 32.3 s | 4.6 % | 0.043 |
+
+Rule of thumb: if the actuator accelerates the quantity you measure, use `ADRC`; if it directly pushes its rate of change, use `ADRC1`.
+
 ## Installation
 
 - **Arduino IDE → Library Manager**: search "ADRC" *(once published)*.

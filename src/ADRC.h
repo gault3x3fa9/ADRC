@@ -146,4 +146,65 @@ private:
     bool inAuto;
 };
 
+/*
+  First-order Linear ADRC (LADRC-1) — the companion class for plants that
+  behave like  y' = f + b0*u  (thermal systems, wheel/fan speed, RC loads):
+  no inertia-dominated second dynamics. The LESO has two states (z1 = y
+  estimate, z2 = total disturbance estimate) with observer poles at
+  -omega_o and controller pole at -omega_c (Gao's parameterisation):
+      beta1 = 2*omega_o,  beta2 = omega_o^2,  Kp = omega_c.
+  Same API, guards and features as ADRC (ramp, input filter, bumpless
+  transfer, output saturation, observer safety limit omega_o*dt <= 0.5).
+  On first-order plants this is the right tool: cleaner tuning (b0 ~ K/tau)
+  and none of the awkward b0 rescaling that LADRC-2 needs there.
+*/
+class ADRC1 {
+public:
+    ADRC1(double* Input, double* Output, double* Setpoint,
+          double b0, double omega_c, double omega_o);
+
+    bool Compute();
+    bool SetTunings(double b0, double omega_c, double omega_o);
+    void SetSampleTime(unsigned long NewSampleTimeMs);
+    void SetOutputLimits(double Min, double Max);
+    bool SetSetpointRamp(double unitsPerSecond);
+    double GetSetpointRamp() const { return rampRate; }
+    bool SetInputFilter(double cutoffHz);
+    double GetInputFilter() const { return filtHz; }
+    void SetMode(int Mode);
+    int  GetMode() const { return inAuto ? AUTOMATIC : MANUAL; }
+    void Initialize();
+    bool IsObserverSafe() const;
+
+    double GetZ1() const { return z1; }  // Estimated output (filtered input)
+    double GetZ2() const { return z2; }  // Estimated total disturbance
+    double GetB0() const { return b0; }
+    double GetOmegaC() const { return omega_c; }
+    double GetOmegaO() const { return omega_o; }
+
+private:
+    void updateGains();
+
+    double* myInput;
+    double* myOutput;
+    double* mySetpoint;
+
+    float b0, invB0, omega_c, omega_o;
+    float beta1, beta2, Kp;
+    float z1, z2;
+
+    float rampRate, rEff;
+    bool rEffValid;
+    float filtHz, yFilt;
+    bool yFiltValid;
+
+    bool computing;
+    unsigned long sampleTimeUs;
+    unsigned long lastTime, lastComputeUs;
+    float dt;
+
+    float outMin, outMax;
+    bool inAuto;
+};
+
 #endif // ADRC_H

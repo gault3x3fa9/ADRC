@@ -6,6 +6,15 @@ Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 ## [1.1.0] — in sviluppo
 
 ### Aggiunto
+- Classe `ADRC1`: LADRC primo ordine per piante del tipo y' = f + b0·u
+  (termiche, velocità, carichi RC). LESO a 2 stati (z1 = stima di y,
+  z2 = disturbo), poli dell'osservatore doppi a −ωo, polo del controllore
+  a −ωc. Stessa API/guardie/feature di `ADRC` (rampa, filtro, bumpless,
+  saturazione, limite ωo·dt ≤ 0.5). Sulla stessa pianta del 1° ordine e
+  con gli stessi parametri: assestamento 18.4 s vs 32.3 s, overshoot 0%
+  vs 4.6%, disturbo 0.030 vs 0.043 rispetto ad `ADRC`. Il codice non
+  referenziato non costa flash su Uno (7318 B invariati).
+  Test: sezione 10 di `extras/test/host_test.cpp` (15 check).
 - `SetInputFilter(hz)` / `GetInputFilter()`: filtro passa-basso a un polo
   sulla misura (prima dell'osservatore), cutoff in Hz. Guadagno DC 1
   (nessun bias a regime). Misurato: rumore sigma=0.05 con omega_o=40 →

@@ -236,3 +236,195 @@ bool ADRC::Compute() {
     *myOutput = u;
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// ADRC1 — first-order Linear ADRC. Same guards and conventions as ADRC.
+// ---------------------------------------------------------------------------
+ADRC1::ADRC1(double* Input, double* Output, double* Setpoint,
+             double b0_val, double omega_c_val, double omega_o_val) {
+    myInput = Input;
+    myOutput = Output;
+    mySetpoint = Setpoint;
+    inAuto = false;
+    computing = false;
+
+    b0 = 1.0f;
+    omega_c = 1.0f;
+    omega_o = 5.0f;
+    z1 = z2 = 0.0f;
+    rampRate = 0.0f; rEff = 0.0f; rEffValid = false;
+    filtHz = 0.0f;  yFilt = 0.0f; yFiltValid = false;
+    outMin = 0.0f;
+    outMax = 255.0f;
+    sampleTimeUs = 10000UL;
+    dt = 0.010f;
+    updateGains();
+
+    lastTime = micros() - sampleTimeUs;
+    lastComputeUs = lastTime;
+
+    SetTunings(b0_val, omega_c_val, omega_o_val);
+}
+
+void ADRC1::updateGains() {
+    invB0 = 1.0f / b0;
+    // Gao's bandwidth parameterisation for the 1st-order case:
+    // observer double pole at -omega_o, controller pole at -omega_c
+    beta1 = 2.0f * omega_o;
+    beta2 = omega_o * omega_o;
+    Kp = omega_c;
+}
+
+bool ADRC1::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
+    if (!isfinite(b0_val) || !isfinite(omega_c_val) || !isfinite(omega_o_val)) return false;
+    if (!(omega_c_val > 0.0) || !(omega_o_val > 0.0)) return false;
+
+    float b0f = (float)b0_val;
+    float wcf = (float)omega_c_val;
+    float wof = (float)omega_o_val;
+    if (b0f == 0.0f || !isfinite(b0f) || !isfinite(wcf) || !isfinite(wof)) return false;
+    if (fabsf(b0f) < FLT_MIN) return false;
+    if (wof * dt > 0.5f) return false;
+
+    b0 = b0f;
+    omega_c = wcf;
+    omega_o = wof;
+    updateGains();
+    return true;
+}
+
+void ADRC1::SetSampleTime(unsigned long NewSampleTimeMs) {
+    if (NewSampleTimeMs == 0 || NewSampleTimeMs > 4000000UL) return;
+    unsigned long newUs = NewSampleTimeMs * 1000UL;
+    if (omega_o * ((float)newUs * 1e-6f) > 0.5f) return;
+    sampleTimeUs = newUs;
+    dt = (float)NewSampleTimeMs / 1000.0f;
+    lastTime = micros() - sampleTimeUs;
+}
+
+void ADRC1::SetOutputLimits(double Min, double Max) {
+    if (!isfinite(Min) || !isfinite(Max)) return;
+    if (!(Min < Max)) return;
+    outMin = (float)Min;
+    outMax = (float)Max;
+
+    if (inAuto && myOutput) {
+        if (*myOutput > outMax) *myOutput = outMax;
+        else if (*myOutput < outMin) *myOutput = outMin;
+    }
+}
+
+bool ADRC1::SetSetpointRamp(double rate) {
+    if (!isfinite(rate) || rate < 0.0) return false;
+    float rf = (float)rate;
+    if (!isfinite(rf)) return false;
+    rampRate = rf;
+    return true;
+}
+
+bool ADRC1::SetInputFilter(double cutoffHz) {
+    if (!isfinite(cutoffHz) || cutoffHz < 0.0) return false;
+    float f = (float)cutoffHz;
+    if (!isfinite(f)) return false;
+    filtHz = f;
+    return true;
+}
+
+void ADRC1::SetMode(int Mode) {
+    bool newAuto = (Mode == AUTOMATIC);
+    if (newAuto && !inAuto) {
+        Initialize();
+    }
+    inAuto = newAuto;
+}
+
+void ADRC1::Initialize() {
+    if (!myInput || !myOutput) return;
+
+    float out = (float)*myOutput;
+    if (out > outMax) out = outMax;
+    else if (out < outMin) out = outMin;
+    *myOutput = out;
+
+    z1 = (float)*myInput;
+    z2 = -b0 * out;          // y' = 0 = f + b0*u  ->  f = -b0*u (bumpless)
+
+    rEff = (float)*myInput;
+    rEffValid = true;
+    yFilt = (float)*myInput;
+    yFiltValid = true;
+
+    lastTime = micros() - sampleTimeUs;
+    lastComputeUs = lastTime;
+}
+
+bool ADRC1::IsObserverSafe() const {
+    return (omega_o * dt) <= 0.5f;
+}
+
+bool ADRC1::Compute() {
+    if (!inAuto || computing) return false;
+    if (!myInput || !myOutput || !mySetpoint) return false;
+
+    unsigned long now = micros();
+    unsigned long elapsed = now - lastTime;
+    if (elapsed < sampleTimeUs) return false;
+
+    unsigned long real = now - lastComputeUs;
+    float stepDt = (real <= 2UL * sampleTimeUs) ? (float)real * 1e-6f : dt;
+    lastComputeUs = now;
+
+    if (elapsed < 2UL * sampleTimeUs) lastTime += sampleTimeUs;
+    else lastTime = now;
+
+    float y = (float)*myInput;
+    float r = (float)*mySetpoint;
+    if (!isfinite(y) || !isfinite(r)) return false;
+
+    if (rampRate > 0.0f) {
+        if (!rEffValid) { rEff = r; rEffValid = true; }
+        else {
+            float delta = r - rEff;
+            float step = rampRate * stepDt;
+            if (delta > step)       rEff += step;
+            else if (delta < -step) rEff -= step;
+            else                    rEff = r;
+        }
+    } else {
+        rEff = r;
+    }
+
+    if (filtHz > 0.0f) {
+        if (!yFiltValid) { yFilt = y; yFiltValid = true; }
+        else {
+            float w = 6.2831853f * filtHz * stepDt;
+            float alpha = w / (1.0f + w);
+            yFilt += alpha * (y - yFilt);
+        }
+        y = yFilt;
+    }
+
+    float uPrev = (float)*myOutput;
+
+    computing = true;
+
+    // 1. Observer error
+    float e = z1 - y;
+
+    // 2. LESO update (explicit Euler, first-order plant model)
+    z1 += stepDt * (-beta1 * e + z2 + b0 * uPrev);
+    z2 += stepDt * (-beta2 * e);
+
+    // 3. Proportional control on the estimated state + disturbance rejection
+    float u0 = Kp * (rEff - z1);
+    float u = (u0 - z2) * invB0;
+
+    computing = false;
+
+    if (u > outMax) u = outMax;
+    else if (u < outMin) u = outMin;
+    else if (u != u) u = uPrev;
+
+    *myOutput = u;
+    return true;
+}
