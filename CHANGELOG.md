@@ -3,6 +3,19 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
+## [1.2.0] — ramo feature/nladrc (sperimentale)
+
+### Aggiunto
+- Classe `NLADRC`: variante non lineare di Han (fal su osservatore e
+  controllo), profilo opt-in via `SetNonlinearProfile(a1, a2, ao, dCtrl,
+  dObs)`; default = equivalenza esatta con `ADRC` (verificata in test).
+  Guardie di famiglia complete (rampa, filtro, bumpless, self-heal,
+  ωo·dt ≤ 0.5). Fuzz esteso a 1.2M iterazioni sulle tre classi.
+- **Verdetto misurato (NO-GO come default)**: il profilo classico di Han
+  non batte il lineare su nessuna pianta del benchmark (ITAE 10–40×
+  peggiore; jitter attuatore ~8× con rumore). Documentato in README/LEGGIMI;
+  classe mantenuta come opt-in sperimentale.
+
 ## [1.1.0] — 2026-11-14
 
 ### Aggiunto

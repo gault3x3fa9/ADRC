@@ -173,6 +173,41 @@ static Result runFirstOrder(bool useAdrc1, double b0, double wc, double wo,
     return r;
 }
 
+// Nominal 2nd-order plant step for the NLADRC tests: same plant as the
+// nominal LADRC case, optional nonlinear profile. Returns step metrics.
+static Result runNL(double alpha1, double alpha2, double ao2, double delta,
+                    double wc, double wo, double probeT, double* yProbe) {
+    double Setpoint = 20.0, Input = 0.0, Output = 0.0;
+    g_micros = 0;
+    NLADRC c(&Input, &Output, &Setpoint, 10.0, wc, wo);
+    c.SetOutputLimits(-100.0, 100.0);
+    c.SetSampleTime(10);
+    if (alpha1 != 1.0 || alpha2 != 1.0 || ao2 != 1.0)
+        c.SetNonlinearProfile(alpha1, alpha2, ao2, delta, delta);
+    c.SetMode(AUTOMATIC);
+    const double a1 = 1.5, a0 = 0.5, h = 0.001;
+    double pos = 0, vel = 0, peak = 0, settle = 0, devMax = 0;
+    for (long i = 0; i < 15000; i++) {
+        double t = i * h;
+        double dist = (t >= 5.0 && t < 10.0) ? -30.0 : 0.0;
+        vel += (-a1 * vel - a0 * pos + 10.0 * Output + dist) * h;
+        pos += vel * h;
+        g_micros = (unsigned long)(t * 1e6);
+        Input = pos;
+        c.Compute();
+        if (yProbe && fabs(t - probeT) < h / 2) *yProbe = pos;
+        if (t < 5.0) {
+            if (pos > peak) peak = pos;
+            if (fabs(pos - 20.0) > 0.4) settle = t;
+        } else if (t < 10.0) {
+            double d = fabs(pos - 20.0);
+            if (d > devMax) devMax = d;
+        }
+    }
+    Result r = { peak - 20.0, settle, devMax, fabs(pos - 20.0) };
+    return r;
+}
+
 int main() {
     // 1. Nominal tuning (same as examples/SimulatedSystem)
     Result n = runStep(10.0, 10.0, 4.0, 25.0, 20.0);
@@ -446,6 +481,57 @@ int main() {
         ADRC1 n(nullptr, nullptr, nullptr, 10, 4, 25);
         g_micros = 20000;
         CHECK(n.Compute() == false, "ADRC1: null pointers, no crash");
+    }
+
+    // 11. NLADRC: nonlinear fal-based ADRC (V2.2 spike, feature branch)
+    {
+        // 11a. guards and API mirror the family contract
+        double in = 0, out = 0, sp = 0;
+        NLADRC c(&in, &out, &sp, 0.0, -1.0, 0.0);     // all invalid
+        CHECK(c.GetB0() != 0.0 && c.GetOmegaC() > 0.0 && c.GetOmegaO() > 0.0,
+              "NLADRC: invalid constructor args leave a safe state");
+        CHECK(!c.SetTunings(0.0, 4.0, 25.0), "NLADRC: SetTunings rejects b0 == 0");
+        CHECK(!c.SetNonlinearProfile(-0.5, 1.5, 0.5, 1.0, 1.0), "NLADRC: negative alpha1 rejected");
+        CHECK(!c.SetNonlinearProfile(0.75, 1.5, 0.5, 0.0, 1.0), "NLADRC: delta <= 0 rejected");
+        CHECK(!c.SetNonlinearProfile(0.75, 1.5, 0.5, NAN, 1.0), "NLADRC: NaN delta rejected");
+        CHECK(c.SetNonlinearProfile(0.75, 1.5, 0.5, 1.0, 1.0), "NLADRC: sane profile accepted");
+        CHECK(c.GetAlpha1() == 0.75f && c.GetDeltaCtrl() == 1.0f && c.GetDeltaObs() == 1.0f,
+              "NLADRC: profile getters reflect the accepted values");
+
+        // 11b. linear-equivalent profile (all alphas = 1) must behave like ADRC
+        Result lin = runNL(1.0, 1.0, 1.0, 1.0, 4.0, 25.0, -1, nullptr);
+        printf("NLADRC (alpha=1, i.e. linear): overshoot=%.3f settle=%.2fs maxDev=%.3f finalErr=%.4f\n",
+               lin.overshoot, lin.settle, lin.maxDev, lin.finalErr);
+        CHECK(lin.finalErr < 0.05, "NLADRC: linear-equivalent converges to the setpoint");
+        CHECK(fabs(lin.settle - 1.31) < 0.4, "NLADRC: linear-equivalent settles like the LADRC baseline");
+
+        // 11c. Han's classic profile (a1=0.75, a2=1.5, ao2=0.5) still converges
+        //      and rejects the disturbance on the same plant
+        Result nl = runNL(0.75, 1.5, 0.5, 2.0, 4.0, 25.0, -1, nullptr);
+        printf("NLADRC (Han profile):         overshoot=%.3f settle=%.2fs maxDev=%.3f finalErr=%.4f\n",
+               nl.overshoot, nl.settle, nl.maxDev, nl.finalErr);
+        CHECK(nl.finalErr < 0.05, "NLADRC: Han profile converges to the setpoint");
+        CHECK(nl.settle <= lin.settle * 4.0 + 0.1, "NLADRC: Han profile slower than linear but bounded (documented)");
+        CHECK(nl.maxDev < 1.0, "NLADRC: Han profile rejects the -30 disturbance");
+        CHECK(fabs(nl.overshoot) < 2.0, "NLADRC: Han profile overshoot bounded");
+
+        // 11d. bumpless MANUAL -> AUTOMATIC with the nonlinear profile on
+        {
+            double in2 = 5.0, out2 = 3.0, sp2 = 5.0;
+            g_micros = 1000000UL;
+            NLADRC b(&in2, &out2, &sp2, 10, 4, 25);
+            b.SetOutputLimits(-100, 100);
+            b.SetNonlinearProfile(0.75, 1.5, 0.5, 1.0, 1.0);
+            b.SetMode(AUTOMATIC);
+            g_micros += 10000UL;
+            b.Compute();
+            CHECK(fabs(out2 - 3.0) < 0.01, "NLADRC: bumpless transfer with profile on");
+        }
+
+        // 11e. null pointers safe
+        NLADRC n(nullptr, nullptr, nullptr, 10, 4, 25);
+        g_micros = 20000;
+        CHECK(n.Compute() == false, "NLADRC: null pointers, no crash");
     }
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);

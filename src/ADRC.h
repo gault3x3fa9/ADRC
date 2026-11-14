@@ -207,4 +207,89 @@ private:
     bool inAuto;
 };
 
+/*
+  Nonlinear ADRC (NLADRC) — Han's fal-based variant of the 2nd-order class.
+
+  The linear terms of ADRC are replaced (opt-in) by Han's fal function:
+      fal(e, a, d) = |e|^a * sign(e)    if |e| > d     (soft far away)
+                   = e / d^(1-a)         if |e| <= d    (high gain near zero)
+  With every exponent set to 1 the class is EXACTLY equivalent to ADRC
+  (default). The classic Han profile is alpha1=0.75 (position error),
+  alpha2=1.5 (velocity), alphaObs=0.5, with delta set to ~10% of the
+  typical error span, in input units.
+
+  Same API, guards and features as the family: ramp, input filter, bumpless
+  transfer, saturation, self-healing, omega_o*dt <= 0.5 observer limit.
+  Cost: up to 3 powf() per update when a nonlinear profile is active
+  (hundreds of cycles each on AVR - prefer 100..200 Hz control rates on a
+  16 MHz Uno; on 32-bit boards it is negligible).
+*/
+class NLADRC {
+public:
+    NLADRC(double* Input, double* Output, double* Setpoint,
+           double b0, double omega_c, double omega_o);
+
+    bool Compute();
+    bool SetTunings(double b0, double omega_c, double omega_o);
+    void SetSampleTime(unsigned long NewSampleTimeMs);
+    void SetOutputLimits(double Min, double Max);
+    bool SetSetpointRamp(double unitsPerSecond);
+    double GetSetpointRamp() const { return rampRate; }
+    bool SetInputFilter(double cutoffHz);
+    double GetInputFilter() const { return filtHz; }
+
+    // Nonlinear profile (all in input units for the deltas).
+    // Exponents of 1 (default) give the linear ADRC behaviour.
+    // Returns false for non-finite values, exponents <= 0 or > 3,
+    // or deltas <= 0.
+    bool SetNonlinearProfile(double alpha1, double alpha2, double alphaObs,
+                             double deltaCtrl, double deltaObs);
+    double GetAlpha1() const { return a1; }
+    double GetAlpha2() const { return a2; }
+    double GetAlphaObs() const { return ao; }
+    double GetDeltaCtrl() const { return dCtrl; }
+    double GetDeltaObs() const { return dObs; }
+
+    void SetMode(int Mode);
+    int  GetMode() const { return inAuto ? AUTOMATIC : MANUAL; }
+    void Initialize();
+    bool IsObserverSafe() const;
+
+    double GetZ1() const { return z1; }
+    double GetZ2() const { return z2; }
+    double GetZ3() const { return z3; }
+    double GetB0() const { return b0; }
+    double GetOmegaC() const { return omega_c; }
+    double GetOmegaO() const { return omega_o; }
+
+private:
+    void updateGains();
+    void updateFalCoeffs();
+
+    double* myInput;
+    double* myOutput;
+    double* mySetpoint;
+
+    float b0, invB0, omega_c, omega_o;
+    float beta1, beta2, beta3, Kp, Kd;
+    float z1, z2, z3;
+
+    float a1, a2, ao;            // fal exponents (1 = linear)
+    float dCtrl, dObs;           // linear-band widths [input units]
+    float pow1c, pow2c, powO;    // precomputed 1/delta^(1-alpha)
+
+    float rampRate, rEff;
+    bool rEffValid;
+    float filtHz, yFilt;
+    bool yFiltValid;
+
+    bool computing;
+    unsigned long sampleTimeUs;
+    unsigned long lastTime, lastComputeUs;
+    float dt;
+
+    float outMin, outMax;
+    bool inAuto;
+};
+
 #endif // ADRC_H

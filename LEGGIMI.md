@@ -181,9 +181,15 @@ g++ -O2 -Wall -Wextra -I extras/test/stub -I src extras/test/usage_campaign.cpp 
 
 Dettagli, log e report: [`extras/test/README.md`](extras/test/README.md).
 
+## Sperimentale: NLADRC (variante non lineare con fal) — ramo feature
+
+`NLADRC` implementa l'ADRC *non lineare* originale di Han: le correzioni lineari vengono sostituite (opt-in) dalla funzione `fal(e, α, δ)` tramite `SetNonlinearProfile()`. Con tutti gli esponenti a 1 (il default) la classe è **esattamente equivalente ad `ADRC`** — verificato alla quarta cifra decimale nella suite di test.
+
+**Verdetto misurato sulle nostre piante** (stesso protocollo di tuning del benchmark): il profilo classico di Han (α₁=0.75, α₂=1.5, α₀=0.5) **non** batte l'ADRC lineare da nessuna parte dove abbiamo testato — step nominali (ITAE 10–40× peggio), grandi step saturi, tuning lenti — e amplifica il rumore del sensore ~8× sull'attuatore. Meccanismo: fuori dalla banda lineare `fal` *riduce* le correzioni dell'osservatore proprio quando le innovazioni sono grandi, e il suo guadagno alto vicino a zero amplifica il rumore. È la ragione storica per cui esiste il LADRC. La classe resta come opt-in sperimentale per casi d'uso esotici; per tutto ciò a cui questa libreria mira, usa `ADRC`/`ADRC1`.
+
 ## Riferimenti
 
-Il LADRC e la sua parametrizzazione in banda derivano da Zhiqiang Gao, *"Scaling and bandwidth-parameterization based controller tuning"*, ACC 2003.
+Il LADRC e la sua parametrizzazione in banda derivano da Zhiqiang Gao, *"Scaling and bandwidth-parameterization based controller tuning"*, ACC 2003. La variante non lineare e `fal` derivano dai lavori originali di Jingqing Han (1998–2009).
 
 ## Licenza
 

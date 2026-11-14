@@ -145,6 +145,7 @@ static long fuzz_##CLASSNAME(unsigned long seed) {                         \
 
 FUZZ_CLASS(ADRC)
 FUZZ_CLASS(ADRC1)
+FUZZ_CLASS(NLADRC)
 
 // ---------------------------------------------- closed-loop chaos run ----
 // Valid tunings, random bounded measurement noise, random mode flips:
@@ -245,7 +246,8 @@ int main() {
     printf("=== fuzz API (invarianti V1-V5) ===\n");
     long v = fuzz_ADRC(123456789UL);
     v += fuzz_ADRC1(987654321UL);
-    CHECK(v == 0, "fuzz API: nessuna violazione delle invarianti (800k iterazioni)");
+    v += fuzz_NLADRC(555555555UL);
+    CHECK(v == 0, "fuzz API: nessuna violazione delle invarianti (1.2M iterazioni)");
 
     printf("=== chaos in closed loop (V6) ===\n");
     long cv = chaos(424242UL);
