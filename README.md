@@ -95,6 +95,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 | `void SetSampleTime(ms)` | Sampling period (default 10 ms). 0, > 4000000, or values that would make ωo · dt > 0.5 are ignored. |
 | `void SetOutputLimits(min, max)` | Saturation. Non-finite limits are ignored. The observer uses the saturated output, so it does not wind up. Default 0..255: on signed (bidirectional) plants set symmetric limits. |
 | `bool SetSetpointRamp(rate)` | Slew-limit the internal reference, in (input units)/s: an abrupt `Setpoint` change becomes a controlled ramp (0 = disabled, default). Returns `false` for negative or non-finite rates. On `SetMode(AUTOMATIC)` the ramp restarts from the current `Input` (bumpless). `GetSetpointRamp()` reads it back. |
+| `bool SetInputFilter(hz)` | One-pole low-pass on the measurement, before the observer (cutoff in Hz, 0 = disabled, default). Attenuates sensor noise so a higher ωo stays usable; DC gain is exactly 1. Too low a cutoff adds lag and limits the achievable ωc. `GetInputFilter()` reads it back. |
 | `void SetMode(AUTOMATIC / MANUAL)` | Switching to `AUTOMATIC` initialises the observer from the current Input/Output: **bumpless transfer**. |
 | `void Initialize()` | Re-initialise the observer manually. |
 | `bool IsObserverSafe()` | `true` if ωo · dt ≤ 0.5. |

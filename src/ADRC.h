@@ -79,6 +79,15 @@ public:
     bool SetSetpointRamp(double unitsPerSecond);
     double GetSetpointRamp() const { return rampRate; }
 
+    // One-pole low-pass filter on the measurement, cutoff in Hz, applied
+    // BEFORE the observer. Attenuates sensor noise so a higher omega_o
+    // stays usable with noisy/quantised sensors. 0 disables it (default).
+    // DC gain is exactly 1 (no steady-state bias); too low a cutoff adds
+    // phase lag and limits the achievable omega_c. Returns false (and
+    // changes nothing) for negative or non-finite cutoffs.
+    bool SetInputFilter(double cutoffHz);
+    double GetInputFilter() const { return filtHz; }
+
     // AUTOMATIC / MANUAL. Switching to AUTOMATIC re-initialises the observer
     // from the current Input and Output (bumpless transfer).
     void SetMode(int Mode);
@@ -119,6 +128,10 @@ private:
     // Setpoint ramp (0 = disabled)
     float rampRate, rEff;
     bool rEffValid;
+
+    // Input filter (0 = disabled)
+    float filtHz, yFilt;
+    bool yFiltValid;
 
     // Reentrancy latch (see Compute)
     bool computing;

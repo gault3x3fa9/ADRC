@@ -83,6 +83,58 @@ static Result runRamp(double rate, double probeT, double* yProbe) {
     return r;
 }
 
+// Deterministic gaussian noise for the filter tests (LCG + Box-Muller)
+struct TRng {
+    unsigned long s;
+    explicit TRng(unsigned long seed) : s(seed ? seed : 1UL) {}
+    double next() {
+        s = s * 1664525UL + 1013904223UL;
+        return ((s >> 8) & 0xFFFFFF) / 16777216.0;
+    }
+    double gauss() {
+        double u1 = next(), u2 = next();
+        while (u1 <= 1e-12) u1 = next();
+        return sqrt(-2.0 * log(u1)) * cos(6.283185307179586 * u2);
+    }
+};
+
+// Nominal plant + measurement noise (sigma), optional input filter (Hz).
+// Returns step metrics plus the mean |du| actuator jitter over the last 3 s.
+static Result runNoise(double filterHz, unsigned seed, double* jitter) {
+    double Setpoint = 20.0, Input = 0.0, Output = 0.0;
+    g_micros = 0;
+    ADRC c(&Input, &Output, &Setpoint, 10.0, 4.0, 40.0);   // fast observer
+    c.SetOutputLimits(-100.0, 100.0);
+    c.SetSampleTime(10);
+    if (filterHz > 0) c.SetInputFilter(filterHz);
+    c.SetMode(AUTOMATIC);
+    TRng rng(seed);
+    const double a1 = 1.5, a0 = 0.5, h = 0.001, sigma = 0.05;
+    double pos = 0, vel = 0, peak = 0, settle = 0, devMax = 0;
+    double jitSum = 0, outPrev = 0; int jitN = 0;
+    for (long i = 0; i < 15000; i++) {
+        double t = i * h;
+        double dist = (t >= 5.0 && t < 10.0) ? -30.0 : 0.0;
+        vel += (-a1 * vel - a0 * pos + 10.0 * Output + dist) * h;
+        pos += vel * h;
+        g_micros = (unsigned long)(t * 1e6);
+        Input = pos + sigma * rng.gauss();     // noisy sensor
+        c.Compute();
+        if (t < 5.0) {
+            if (pos > peak) peak = pos;
+            if (fabs(pos - 20.0) > 0.4) settle = t;
+        } else if (t < 10.0) {
+            double d = fabs(pos - 20.0);
+            if (d > devMax) devMax = d;
+        }
+        if (t >= 9.0) { jitSum += fabs(Output - outPrev); jitN++; }
+        outPrev = Output;
+    }
+    if (jitter) *jitter = jitSum / jitN;
+    Result r = { peak - 20.0, settle, devMax, fabs(pos - 20.0) };
+    return r;
+}
+
 int main() {
     // 1. Nominal tuning (same as examples/SimulatedSystem)
     Result n = runStep(10.0, 10.0, 4.0, 25.0, 20.0);
@@ -224,6 +276,82 @@ int main() {
         g_micros += 10000UL;
         c.Compute();
         CHECK(fabs(out - 3.0) < 0.01, "ramp: bumpless transfer still works");
+    }
+
+    // 9. Input filter (V2): one-pole low-pass on the measurement
+    {
+        double in = 0, out = 0, sp = 0;
+        ADRC c(&in, &out, &sp, 10, 4, 25);
+        CHECK(c.GetInputFilter() == 0.0, "filter: disabled by default");
+        CHECK(!c.SetInputFilter(-1.0), "filter: negative cutoff rejected");
+        CHECK(!c.SetInputFilter(NAN), "filter: NaN cutoff rejected");
+        CHECK(c.GetInputFilter() == 0.0, "filter: state unchanged after rejections");
+        CHECK(c.SetInputFilter(2.0), "filter: positive cutoff accepted");
+
+        double jit_nf = -1, jit_f = -1;
+        Result nf = runNoise(0.0, 42, &jit_nf);          // same seed, same noise
+        Result ff = runNoise(2.0, 42, &jit_f);
+        printf("no filter: jitter=%.3f finalErr=%.4f\n", jit_nf, nf.finalErr);
+        printf("fc=2Hz   : jitter=%.3f finalErr=%.4f maxDev=%.3f\n", jit_f, ff.finalErr, ff.maxDev);
+        CHECK(jit_f < jit_nf / 2.0, "filter: actuator jitter at least halved");
+        CHECK(ff.finalErr < 0.1, "filter: still converges with noise + filter");
+        CHECK(ff.maxDev < 1.0, "filter: disturbance rejection preserved");
+
+        // clean step with the filter on: only a small lag penalty
+        double yProbe = -1;
+        Result cf = runRamp(0.0, -1, &yProbe);           // no ramp
+        // rerun nominal WITH filter via a dedicated pass
+        {
+            double Setpoint = 20, Input = 0, Output = 0;
+            g_micros = 0;
+            ADRC c2(&Input, &Output, &Setpoint, 10, 4, 25);
+            c2.SetOutputLimits(-100, 100);
+            c2.SetSampleTime(10);
+            c2.SetInputFilter(5.0);
+            c2.SetMode(AUTOMATIC);
+            double pos = 0, vel = 0, settle = 0, devMax = 0;
+            for (long i = 0; i < 15000; i++) {
+                double t = i * 0.001;
+                double dist = (t >= 5.0 && t < 10.0) ? -30.0 : 0.0;
+                vel += (-1.5 * vel - 0.5 * pos + 10 * Output + dist) * 0.001;
+                pos += vel * 0.001;
+                g_micros = (unsigned long)(t * 1e6);
+                Input = pos;
+                c2.Compute();
+                if (t < 5.0 && fabs(pos - 20) > 0.4) settle = t;
+                if (t >= 5.0 && t < 10.0 && fabs(pos - 20) > devMax) devMax = fabs(pos - 20);
+            }
+            (void)cf;
+            printf("fc=5Hz clean: settle=%.2fs maxDev=%.3f finalErr=%.4f\n",
+                   settle, devMax, fabs(pos - 20));
+            CHECK(settle < 2.0, "filter: clean step still settles < 2 s (small lag)");
+            CHECK(devMax < 1.0, "filter: clean disturbance rejection preserved");
+            CHECK(fabs(pos - 20) < 0.05, "filter: zero steady-state error (DC gain 1)");
+        }
+
+        // Inf glitch with the filter on: still held, finite, clamped
+        {
+            double Setpoint = 20, Input = 0, Output = 0;
+            g_micros = 0;
+            ADRC c3(&Input, &Output, &Setpoint, 10, 4, 25);
+            c3.SetOutputLimits(-100, 100);
+            c3.SetSampleTime(10);
+            c3.SetInputFilter(5.0);
+            c3.SetMode(AUTOMATIC);
+            double pos = 0, vel = 0;
+            for (long i = 0; i < 15000; i++) {
+                double t = i * 0.001;
+                int glitch = (t >= 2.0 && t < 2.02);
+                vel += (-1.5 * vel - 0.5 * pos + 10 * Output) * 0.001;
+                pos += vel * 0.001;
+                Input = glitch ? INFINITY : pos;
+                g_micros = (unsigned long)(t * 1e6);
+                c3.Compute();
+            }
+            CHECK(Output == Output && Output >= -100 && Output <= 100,
+                  "filter: Inf glitch still held, output finite and clamped");
+            CHECK(fabs(pos - 20) < 1.0, "filter: loop still settles after the glitch");
+        }
     }
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);

@@ -18,6 +18,9 @@ ADRC::ADRC(double* Input, double* Output, double* Setpoint,
     rampRate = 0.0f;
     rEff = 0.0f;
     rEffValid = false;
+    filtHz = 0.0f;
+    yFilt = 0.0f;
+    yFiltValid = false;
     outMin = 0.0f;
     outMax = 255.0f;
     sampleTimeUs = 10000UL;
@@ -106,6 +109,15 @@ bool ADRC::SetSetpointRamp(double rate) {
     return true;
 }
 
+bool ADRC::SetInputFilter(double cutoffHz) {
+    // 0 = disabled; negative or non-finite cutoffs are rejected outright
+    if (!isfinite(cutoffHz) || cutoffHz < 0.0) return false;
+    float f = (float)cutoffHz;
+    if (!isfinite(f)) return false;            // beyond float range
+    filtHz = f;
+    return true;
+}
+
 void ADRC::SetMode(int Mode) {
     bool newAuto = (Mode == AUTOMATIC);
     if (newAuto && !inAuto) {
@@ -134,6 +146,10 @@ void ADRC::Initialize() {
     // (the first control action is unchanged) and no reference jump.
     rEff = (float)*myInput;
     rEffValid = true;
+
+    // Filtered measurement restarts from the current reading (no kick)
+    yFilt = (float)*myInput;
+    yFiltValid = true;
 
     lastTime = micros() - sampleTimeUs;
     lastComputeUs = lastTime;
@@ -164,6 +180,18 @@ bool ADRC::Compute() {
     float y = (float)*myInput;
     float r = (float)*mySetpoint;
     if (!isfinite(y) || !isfinite(r)) return false;  // NaN/Inf: hold the output
+
+    // Optional one-pole low-pass on the measurement (before the observer).
+    // alpha = 2*pi*fc*dt / (1 + 2*pi*fc*dt): exactly unity DC gain.
+    if (filtHz > 0.0f) {
+        if (!yFiltValid) { yFilt = y; yFiltValid = true; }
+        else {
+            float w = 6.2831853f * filtHz * stepDt;
+            float alpha = w / (1.0f + w);
+            yFilt += alpha * (y - yFilt);
+        }
+        y = yFilt;                               // observer sees the filtered y
+    }
 
     // Ramped reference: slew-limit r toward the setpoint (0 = passthrough)
     if (rampRate > 0.0f) {

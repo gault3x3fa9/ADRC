@@ -6,6 +6,13 @@ Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 ## [1.1.0] — in sviluppo
 
 ### Aggiunto
+- `SetInputFilter(hz)` / `GetInputFilter()`: filtro passa-basso a un polo
+  sulla misura (prima dell'osservatore), cutoff in Hz. Guadagno DC 1
+  (nessun bias a regime). Misurato: rumore sigma=0.05 con omega_o=40 →
+  jitter dell'attuatore da 0.735 a 0.058 (~13x) con fc=2 Hz, disturbo
+  ancora rejettto (0.33). 0 = disattivo (default, comportamento
+  invariato). Test: sezione 9 di `extras/test/host_test.cpp`.
+  Costo: +302 B flash, +9 B RAM su Uno.
 - `SetSetpointRamp(rate)` / `GetSetpointRamp()`: slew-limit del riferimento
   interno (unità/s). Un gradone di setpoint diventa una rampa controllata;
   0 = disattiva (default, comportamento invariato). Il riferimento rampato
