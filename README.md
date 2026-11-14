@@ -121,6 +121,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 |---|---|
 | `SimulatedSystem` | Runs on any board with **no hardware**: simulated plant, a −30 disturbance at 5 s, live plots of position, output and estimated vs. true disturbance (Serial Plotter, 115200 baud). |
 | `BasicUsage` | Template for a DC motor (PWM + direction) with an analog position sensor. *Template only: syntax-checked, not run on real hardware — adapt pins, scaling and tuning.* |
+| `ADRC1Heater` | Template for temperature control with the first-order `ADRC1`: SSR/MOSFET heater + analog sensor, input filter and setpoint ramp included. *Template only — adapt pins, scaling and tuning.* |
 
 ## Measured results
 

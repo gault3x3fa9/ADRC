@@ -3,9 +3,11 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
-## [1.1.0] — in sviluppo
+## [1.1.0] — 2026-11-14
 
 ### Aggiunto
+- Esempio `ADRC1Heater`: template controllo temperatura con ADRC1
+  (filtro ingresso, rampa setpoint, diagnostica z2). Compilato per Uno.
 - Test fuzz deterministico (`extras/test/fuzz_test.cpp`, in CI): 800k
   iterazioni API casuali (NaN/Inf/subnormali/±0/1e38) + 900k passi di
   chaos in closed loop con verifica di 6 invarianti documentate, più

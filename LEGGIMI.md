@@ -121,6 +121,7 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 |---|---|
 | `SimulatedSystem` | Funziona su qualsiasi scheda **senza hardware**: sistema simulato, disturbo di −30 a 5 s, grafici live di posizione, uscita e disturbo stimato vs. reale (Serial Plotter, 115200 baud). |
 | `BasicUsage` | Template per un motore DC (PWM + direzione) con sensore di posizione analogico. *Solo template: controllato sintatticamente, non provato su hardware reale — adatta pin, scala e taratura.* |
+| `ADRC1Heater` | Template per il controllo di temperatura con la `ADRC1` del primo ordine: riscaldatore SSR/MOSFET + sensore analogico, filtro sull'ingresso e rampa del setpoint inclusi. *Solo template — adatta pin, scala e taratura.* |
 
 ## Risultati misurati
 

@@ -76,5 +76,6 @@ jobs:
           sketch-paths: |
             - examples/SimulatedSystem
             - examples/BasicUsage
+            - examples/ADRC1Heater
           libraries: |
             - source-path: ./
