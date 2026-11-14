@@ -181,9 +181,15 @@ g++ -O2 -Wall -Wextra -I extras/test/stub -I src extras/test/usage_campaign.cpp 
 
 Details, logs and reports: [`extras/test/README.md`](extras/test/README.md).
 
+## Experimental: NLADRC (nonlinear fal variant) — feature branch
+
+`NLADRC` implements Han's original *nonlinear* ADRC: the linear corrections are replaced (opt-in) by the `fal(e, α, δ)` function via `SetNonlinearProfile()`. With all exponents at 1 (the default) the class is **exactly equivalent to `ADRC`** — verified to the fourth decimal in the test suite.
+
+**Measured verdict on our plants** (same tuning protocol as the benchmark): the classic Han profile (α₁=0.75, α₂=1.5, α₀=0.5) does **not** beat the linear ADRC anywhere we tested — nominal steps (ITAE 10–40× worse), large saturated steps, slow tunings — and amplifies sensor noise ~8× on the actuator. The mechanism: outside the linear band `fal` *reduces* the observer corrections exactly when innovations are large, and its high gain near zero amplifies noise. This matches the historical reason LADRC exists. The class is kept as an experimental opt-in for exotic use cases; for everything this library targets, use `ADRC`/`ADRC1`.
+
 ## Background
 
-LADRC and its bandwidth parameterisation come from Zhiqiang Gao, *"Scaling and bandwidth-parameterization based controller tuning"*, ACC 2003.
+LADRC and its bandwidth parameterisation come from Zhiqiang Gao, *"Scaling and bandwidth-parameterization based controller tuning"*, ACC 2003. The nonlinear variant and `fal` come from Jingqing Han's original ADRC work (1998–2009).
 
 ## License
 

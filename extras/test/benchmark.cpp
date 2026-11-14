@@ -89,7 +89,9 @@ static const double T_END  = 15.0;
 static const double T_DIST_ON = 5.0, T_DIST_OFF = 10.0;
 static const double SP = 20.0, DIST = -30.0;
 
-// Runs one scenario. ctrl: 0 = ADRC, 1 = PID, 2 = ADRC1. noise_sigma: 0 = off.
+// Runs one scenario. ctrl: 0 = ADRC, 1 = PID, 2 = ADRC1, 3 = NLADRC default
+// (exactly linear), 4 = NLADRC with the classic Han profile. In both NLADRC
+// cases pass the ADRC-optimal b0/wc/wo.
 static Metrics runScenario(const Plant& p, int ctrl,
                            double p1, double p2, double p3,
                            double noiseSigma, unsigned* seed) {
@@ -98,6 +100,7 @@ static Metrics runScenario(const Plant& p, int ctrl,
 
     ADRC  adrc(&Input, &Output, &Setpoint, 1, 1, 5);
     ADRC1 adrc1(&Input, &Output, &Setpoint, 1, 1, 5);
+    NLADRC nladrc(&Input, &Output, &Setpoint, 1, 1, 5);
     PID   pid(&Input, &Output, &Setpoint, p1, p2, p3);
     const double dt = 0.010;
     if (ctrl == 0) {
@@ -110,6 +113,13 @@ static Metrics runScenario(const Plant& p, int ctrl,
         adrc1.SetSampleTime(10);
         adrc1.SetTunings(p1, p2, p3);
         adrc1.SetMode(AUTOMATIC);
+    } else if (ctrl == 3 || ctrl == 4) {
+        nladrc.SetOutputLimits(-100, 100);
+        nladrc.SetSampleTime(10);
+        nladrc.SetTunings(p1, p2, p3);
+        if (ctrl == 4)
+            nladrc.SetNonlinearProfile(0.75, 1.5, 0.5, 0.5, 0.5);   // classic Han
+        nladrc.SetMode(AUTOMATIC);
     } else {
         pid.configure(dt, -100, 100);
     }
@@ -152,9 +162,10 @@ static Metrics runScenario(const Plant& p, int ctrl,
 
         Input = meas;
         g_micros = (unsigned long)(t * 1e6);
-        if (ctrl == 0)      adrc.Compute();
-        else if (ctrl == 2) adrc1.Compute();
-        else                pid.compute();
+        if (ctrl == 0)           adrc.Compute();
+        else if (ctrl == 2)      adrc1.Compute();
+        else if (ctrl == 3 || ctrl == 4) nladrc.Compute();
+        else                     pid.compute();
 
         // metrics
         double e = SP - y;
@@ -301,6 +312,16 @@ int main() {
         if (useADRC1)
             printRow("ADRC1 nominal", runScenario(p, 2, t1.p1, t1.p2, t1.p3, 0, &seed1));
         printRow("PID  nominal", runScenario(p, 1, tp.p1, tp.p2, tp.p3, 0, &seedP));
+        if (p.order == 2) {
+            // NLADRC (experimental): linear default must match ADRC; the
+            // classic Han profile is reported at the same optimal tuning.
+            unsigned seedN = 7;
+            Metrics mN = runScenario(p, 3, ta.p1, ta.p2, ta.p3, 0, &seedN);
+            printRow("NLADRC linear", mN);
+            unsigned seedH = 7;
+            Metrics mH = runScenario(p, 4, ta.p1, ta.p2, ta.p3, 0, &seedH);
+            printRow("NLADRC Han", mH);
+        }
 
         // plant perturbations (never shown to the tuner)
         Plant q = p; q.b = p.b * 0.5;
