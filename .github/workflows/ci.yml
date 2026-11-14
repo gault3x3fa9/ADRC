@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: ADRC vs PID effectiveness benchmark (gate: ADRC must not regress)
+      - name: "ADRC vs PID effectiveness benchmark (gate: ADRC must not regress)"
         run: |
           g++ -O2 -Wall -I extras/test/stub -I src \
               extras/test/benchmark.cpp src/ADRC.cpp -o benchmark
