@@ -53,9 +53,11 @@ public:
 
     // Change tunings on the fly. Returns false (and changes nothing) if a
     // parameter is invalid: NaN/Inf, b0 == 0 / subnormal / beyond float
-    // range, omega <= 0, or omega_o * dt > 0.5 at the current sample time
-    // (call SetSampleTime first for a faster observer). Non-finite readings
-    // on Input/Setpoint are ignored by Compute() (output held).
+    // range, omega <= 0, omega_o * dt > 0.5 at the current sample time
+    // (call SetSampleTime first for a faster observer), or a derived gain
+    // (Kp = omega_c^2, Kd = 2*omega_c, beta_i) would overflow float.
+    // Non-finite readings on Input/Setpoint are ignored by Compute()
+    // (output held).
     bool SetTunings(double b0, double omega_c, double omega_o);
 
     // Sample time in milliseconds (default 10). Must be > 0 and <= 4000000.
@@ -63,10 +65,13 @@ public:
     // are ignored (the old sample time stays active).
     void SetSampleTime(unsigned long NewSampleTimeMs);
 
-    // Output saturation (e.g. 0..255 or -255..255). Ignored if Min >= Max or
-    // either limit is NaN/Inf. NOTE: the default is 0..255 - on signed
-    // (bidirectional) plants like a balancing robot set SYMMETRIC limits
-    // (e.g. -255..255) or the controller has no authority in one direction.
+    // Output saturation (e.g. 0..255 or -255..255). Ignored if Min >= Max,
+    // either limit is NaN/Inf, or the limits do not survive narrowing to
+    // the internal float (finite doubles beyond float range, or Min/Max
+    // distinct in double but equal in float). NOTE: the default is 0..255 -
+    // on signed (bidirectional) plants like a balancing robot set SYMMETRIC
+    // limits (e.g. -255..255) or the controller has no authority in one
+    // direction.
     void SetOutputLimits(double Min, double Max);
 
     // Slew-limit the internal reference, in (input units)/s. With a ramp
@@ -109,7 +114,9 @@ public:
     double GetOmegaO() const { return omega_o; }
 
 private:
-    void updateGains();
+    // Recomputes the derived gains. Returns false (writing nothing) if a
+    // gain would overflow float; callers keep the previous tuning.
+    bool updateGains();
 
     double* myInput;
     double* myOutput;
@@ -183,7 +190,8 @@ public:
     double GetOmegaO() const { return omega_o; }
 
 private:
-    void updateGains();
+    // Same derived-gain overflow contract as ADRC::updateGains.
+    bool updateGains();
 
     double* myInput;
     double* myOutput;
@@ -241,7 +249,8 @@ public:
     // Nonlinear profile (all in input units for the deltas).
     // Exponents of 1 (default) give the linear ADRC behaviour.
     // Returns false for non-finite values, exponents <= 0 or > 3,
-    // or deltas <= 0.
+    // deltas <= 0, or a fal coefficient (1/delta^(1-alpha)) that would
+    // overflow float (huge delta with alpha > 1).
     bool SetNonlinearProfile(double alpha1, double alpha2, double alphaObs,
                              double deltaCtrl, double deltaObs);
     double GetAlpha1() const { return a1; }
@@ -263,8 +272,10 @@ public:
     double GetOmegaO() const { return omega_o; }
 
 private:
-    void updateGains();
-    void updateFalCoeffs();
+    // Same derived-gain overflow contract as ADRC::updateGains;
+    // updateFalCoeffs guards the 1/delta^(1-alpha) reciprocals the same way.
+    bool updateGains();
+    bool updateFalCoeffs();
 
     double* myInput;
     double* myOutput;

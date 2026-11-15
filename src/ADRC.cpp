@@ -33,17 +33,27 @@ ADRC::ADRC(double* Input, double* Output, double* Setpoint,
     SetTunings(b0_val, omega_c_val, omega_o_val);
 }
 
-void ADRC::updateGains() {
-    invB0 = 1.0f / b0;
-
+bool ADRC::updateGains() {
     // Gao's bandwidth parameterisation (observer poles at -omega_o,
-    // controller poles at -omega_c)
-    beta1 = 3.0f * omega_o;
-    beta2 = 3.0f * omega_o * omega_o;
-    beta3 = omega_o * omega_o * omega_o;
-
-    Kp = omega_c * omega_c;
-    Kd = 2.0f * omega_c;
+    // controller poles at -omega_c), computed into locals first: if any
+    // derived gain overflows float (e.g. Kp = omega_c^2 above ~1.8e19)
+    // nothing is written and the caller keeps the previous tuning.
+    float nInvB0 = 1.0f / b0;   // b0 is pre-validated (|b0| >= FLT_MIN)
+    float nBeta1 = 3.0f * omega_o;
+    float nBeta2 = 3.0f * omega_o * omega_o;
+    float nBeta3 = omega_o * omega_o * omega_o;
+    float nKp = omega_c * omega_c;
+    float nKd = 2.0f * omega_c;
+    if (!isfinite(nBeta1) || !isfinite(nBeta2) || !isfinite(nBeta3) ||
+        !isfinite(nKp) || !isfinite(nKd) || !isfinite(nInvB0))
+        return false;
+    invB0 = nInvB0;
+    beta1 = nBeta1;
+    beta2 = nBeta2;
+    beta3 = nBeta3;
+    Kp = nKp;
+    Kd = nKd;
+    return true;
 }
 
 bool ADRC::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
@@ -68,10 +78,19 @@ bool ADRC::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
     // the same guard in the other direction).
     if (wof * dt > 0.5f) return false;
 
+    float b0Old = b0, wcOld = omega_c, woOld = omega_o;
     b0 = b0f;
     omega_c = wcf;
     omega_o = wof;
-    updateGains();
+    if (!updateGains()) {
+        // A derived gain (Kp = omega_c^2 above ~1.8e19, Kd = 2*omega_c,
+        // beta_i) overflows float: updateGains() wrote nothing, restore
+        // the previous tunings.
+        b0 = b0Old;
+        omega_c = wcOld;
+        omega_o = woOld;
+        return false;
+    }
     return true;
 }
 
@@ -88,11 +107,17 @@ void ADRC::SetSampleTime(unsigned long NewSampleTimeMs) {
 }
 
 void ADRC::SetOutputLimits(double Min, double Max) {
-    // Non-finite limits would silently disable saturation.
+    // Non-finite limits would silently disable saturation. Narrow to float
+    // FIRST and re-validate: a finite double can overflow float (1e300 ->
+    // +/-Inf), and two distinct doubles can collapse to equal floats -
+    // both would corrupt saturation silently. double->float conversion is
+    // monotonic, so Min < Max can never invert in the narrowing.
     if (!isfinite(Min) || !isfinite(Max)) return;
-    if (!(Min < Max)) return;
-    outMin = (float)Min;
-    outMax = (float)Max;
+    float mn = (float)Min, mx = (float)Max;
+    if (!isfinite(mn) || !isfinite(mx)) return;
+    if (!(mn < mx)) return;
+    outMin = mn;
+    outMax = mx;
 
     if (inAuto && myOutput) {
         if (*myOutput > outMax) *myOutput = outMax;
@@ -279,13 +304,24 @@ ADRC1::ADRC1(double* Input, double* Output, double* Setpoint,
     SetTunings(b0_val, omega_c_val, omega_o_val);
 }
 
-void ADRC1::updateGains() {
-    invB0 = 1.0f / b0;
+bool ADRC1::updateGains() {
     // Gao's bandwidth parameterisation for the 1st-order case:
-    // observer double pole at -omega_o, controller pole at -omega_c
-    beta1 = 2.0f * omega_o;
-    beta2 = omega_o * omega_o;
-    Kp = omega_c;
+    // observer double pole at -omega_o, controller pole at -omega_c.
+    // Same overflow contract as ADRC::updateGains (locals first, write
+    // only if every derived gain stays finite). Kp = omega_c is linear,
+    // so only an extreme omega_o could overflow here - checked anyway.
+    float nInvB0 = 1.0f / b0;
+    float nBeta1 = 2.0f * omega_o;
+    float nBeta2 = omega_o * omega_o;
+    float nKp = omega_c;
+    if (!isfinite(nBeta1) || !isfinite(nBeta2) ||
+        !isfinite(nKp) || !isfinite(nInvB0))
+        return false;
+    invB0 = nInvB0;
+    beta1 = nBeta1;
+    beta2 = nBeta2;
+    Kp = nKp;
+    return true;
 }
 
 bool ADRC1::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
@@ -299,10 +335,17 @@ bool ADRC1::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
     if (fabsf(b0f) < FLT_MIN) return false;
     if (wof * dt > 0.5f) return false;
 
+    float b0Old = b0, wcOld = omega_c, woOld = omega_o;
     b0 = b0f;
     omega_c = wcf;
     omega_o = wof;
-    updateGains();
+    if (!updateGains()) {
+        // Derived-gain overflow: updateGains() wrote nothing, roll back.
+        b0 = b0Old;
+        omega_c = wcOld;
+        omega_o = woOld;
+        return false;
+    }
     return true;
 }
 
@@ -316,10 +359,14 @@ void ADRC1::SetSampleTime(unsigned long NewSampleTimeMs) {
 }
 
 void ADRC1::SetOutputLimits(double Min, double Max) {
+    // Same narrowing guard as ADRC::SetOutputLimits: validate as float
+    // before committing (see there for the rationale).
     if (!isfinite(Min) || !isfinite(Max)) return;
-    if (!(Min < Max)) return;
-    outMin = (float)Min;
-    outMax = (float)Max;
+    float mn = (float)Min, mx = (float)Max;
+    if (!isfinite(mn) || !isfinite(mx)) return;
+    if (!(mn < mx)) return;
+    outMin = mn;
+    outMax = mx;
 
     if (inAuto && myOutput) {
         if (*myOutput > outMax) *myOutput = outMax;
@@ -496,20 +543,39 @@ NLADRC::NLADRC(double* Input, double* Output, double* Setpoint,
     SetTunings(b0_val, omega_c_val, omega_o_val);
 }
 
-void NLADRC::updateGains() {
-    invB0 = 1.0f / b0;
-    beta1 = 3.0f * omega_o;
-    beta2 = 3.0f * omega_o * omega_o;
-    beta3 = omega_o * omega_o * omega_o;
-    Kp = omega_c * omega_c;
-    Kd = 2.0f * omega_c;
+bool NLADRC::updateGains() {
+    // Same formulas and overflow contract as ADRC::updateGains.
+    float nInvB0 = 1.0f / b0;
+    float nBeta1 = 3.0f * omega_o;
+    float nBeta2 = 3.0f * omega_o * omega_o;
+    float nBeta3 = omega_o * omega_o * omega_o;
+    float nKp = omega_c * omega_c;
+    float nKd = 2.0f * omega_c;
+    if (!isfinite(nBeta1) || !isfinite(nBeta2) || !isfinite(nBeta3) ||
+        !isfinite(nKp) || !isfinite(nKd) || !isfinite(nInvB0))
+        return false;
+    invB0 = nInvB0;
+    beta1 = nBeta1;
+    beta2 = nBeta2;
+    beta3 = nBeta3;
+    Kp = nKp;
+    Kd = nKd;
+    return true;
 }
 
-// 1/delta^(1-alpha) precomputed per profile so the linear band costs no powf
-void NLADRC::updateFalCoeffs() {
-    pow1c = (a1 == 1.0f) ? 1.0f : 1.0f / powf(dCtrl, 1.0f - a1);
-    pow2c = (a2 == 1.0f) ? 1.0f : 1.0f / powf(dCtrl, 1.0f - a2);
-    powO  = (ao == 1.0f) ? 1.0f : 1.0f / powf(dObs,  1.0f - ao);
+// 1/delta^(1-alpha) precomputed per profile so the linear band costs no powf.
+// Returns false (writing nothing) if a coefficient would overflow float:
+// with a large delta and alpha > 1, powf(delta, 1-alpha) underflows toward 0
+// and the reciprocal goes to Inf (e.g. alpha=3, delta=1e20).
+bool NLADRC::updateFalCoeffs() {
+    float p1 = (a1 == 1.0f) ? 1.0f : 1.0f / powf(dCtrl, 1.0f - a1);
+    float p2 = (a2 == 1.0f) ? 1.0f : 1.0f / powf(dCtrl, 1.0f - a2);
+    float po = (ao == 1.0f) ? 1.0f : 1.0f / powf(dObs, 1.0f - ao);
+    if (!isfinite(p1) || !isfinite(p2) || !isfinite(po)) return false;
+    pow1c = p1;
+    pow2c = p2;
+    powO = po;
+    return true;
 }
 
 bool NLADRC::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
@@ -523,10 +589,17 @@ bool NLADRC::SetTunings(double b0_val, double omega_c_val, double omega_o_val) {
     if (fabsf(b0f) < FLT_MIN) return false;
     if (wof * dt > 0.5f) return false;
 
+    float b0Old = b0, wcOld = omega_c, woOld = omega_o;
     b0 = b0f;
     omega_c = wcf;
     omega_o = wof;
-    updateGains();
+    if (!updateGains()) {
+        // Derived-gain overflow: updateGains() wrote nothing, roll back.
+        b0 = b0Old;
+        omega_c = wcOld;
+        omega_o = woOld;
+        return false;
+    }
     return true;
 }
 
@@ -540,10 +613,14 @@ void NLADRC::SetSampleTime(unsigned long NewSampleTimeMs) {
 }
 
 void NLADRC::SetOutputLimits(double Min, double Max) {
+    // Same narrowing guard as ADRC::SetOutputLimits: validate as float
+    // before committing (see there for the rationale).
     if (!isfinite(Min) || !isfinite(Max)) return;
-    if (!(Min < Max)) return;
-    outMin = (float)Min;
-    outMax = (float)Max;
+    float mn = (float)Min, mx = (float)Max;
+    if (!isfinite(mn) || !isfinite(mx)) return;
+    if (!(mn < mx)) return;
+    outMin = mn;
+    outMax = mx;
 
     if (inAuto && myOutput) {
         if (*myOutput > outMax) *myOutput = outMax;
@@ -581,9 +658,17 @@ bool NLADRC::SetNonlinearProfile(double alpha1, double alpha2, double alphaObs,
     if (!isfinite(a1f) || !isfinite(a2f) || !isfinite(aof) ||
         !isfinite(dcf) || !isfinite(dof)) return false;
 
+    float a1Old = a1, a2Old = a2, aoOld = ao;
+    float dCtrlOld = dCtrl, dObsOld = dObs;
     a1 = a1f; a2 = a2f; ao = aof;
     dCtrl = dcf; dObs = dof;
-    updateFalCoeffs();
+    if (!updateFalCoeffs()) {
+        // A 1/delta^(1-alpha) coefficient overflows float: nothing was
+        // written, restore the previous profile.
+        a1 = a1Old; a2 = a2Old; ao = aoOld;
+        dCtrl = dCtrlOld; dObs = dObsOld;
+        return false;
+    }
     return true;
 }
 

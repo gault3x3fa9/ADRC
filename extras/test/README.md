@@ -11,7 +11,9 @@ number quoted in the root READMEs is reproducible with the commands below.
 Builds the real `src/ADRC.cpp` against the `stub/Arduino.h` shim and checks
 the documented behaviour: step response, disturbance rejection, wrong-b0
 robustness, reverse-acting plants, input validation, bumpless transfer,
-observer-safety flag.
+observer-safety flag, the NLADRC fal profile (incl. exact linear
+equivalence), and extreme-parameter hardening (derived-gain overflow,
+double→float narrowing of output limits, with full rollback).
 
 ```bash
 python -m ziglang cc -Wall -Wextra -I extras/test/stub -I src \
@@ -38,16 +40,20 @@ Headlines (P1/P2): comparable
 nominal speed vs an optimally tuned PID, **3–8x less overshoot on
 perturbed plants** (gain x0.5 / friction changes), and with 2 % sensor noise
 **~50–120x less actuator jitter** (1–2 output units/sample vs 126–128 for
-PID). On the dead-time plant (P3) PID wins — known LADRC limitation, keep
-`omega_o` low there; the benchmark prints a NOTE.
+PID). On the dead-time plant (P3) `ADRC1` wins — it beats both PID and the
+2nd-order `ADRC` there (ITAE 6.9 vs 7.2 vs 43.4); the 2nd-order ADRC is the
+one that struggles with dead time (known LADRC limitation, keep `omega_o`
+low there); the benchmark prints a NOTE.
 
 ## 3. Robustness / adversarial tests — `robustness_test.cpp`
 
-Executable reproducers for every numeric-safety claim (IDs R1–R10): NaN/Inf
+Executable reproducers for every numeric-safety claim (IDs R1–R12): NaN/Inf
 sensor readings, denormal `b0`, absurd `omega_o`, `micros()` rollover at
 2^32, loop stalls, guard rails. All adversarial inputs are **contained**
-(post-hardening); every hardening fix is mapped one-to-one to the R1–R10
-cases in `robustness_test.cpp`.
+(post-hardening); every hardening fix is mapped one-to-one to the R1–R12
+cases in `robustness_test.cpp`. R11 = derived-gain overflow (Kp = ωc²) in
+`SetTunings()`, R12 = output limits that do not survive double→float
+narrowing (±Inf, or collapse to equal floats) in `SetOutputLimits()`.
 
 ```bash
 python -m ziglang cc -Wall -I extras/test/stub -I src \
@@ -57,8 +63,9 @@ python -m ziglang cc -Wall -I extras/test/stub -I src \
 ## 4. Deterministic fuzz + stability sweep — `fuzz_test.cpp`
 
 Hundreds of thousands of random API sequences and sensor values (NaN,
-±Inf, subnormals, ±0, 1e38) verify the documented invariants on BOTH
-controller classes: output always finite and clamped, `Compute()==false`
+±Inf, subnormals, ±0, 1e38) verify the documented invariants on ALL THREE
+controller classes (ADRC, ADRC1, NLADRC): output always finite and clamped,
+`Compute()==false`
 leaves `Output` bit-unchanged, accepted tunings keep the observer safe,
 states stay finite. A closed-loop chaos phase (9 tunings × 100k steps with
 noise) and a b0-error sweep (1/8×..8× at three bandwidths) complete the
@@ -69,7 +76,7 @@ g++ -O2 -Wall -Wextra -std=gnu++11 -I extras/test/stub -I src \
     extras/test/fuzz_test.cpp src/ADRC.cpp -o fuzz_test && ./fuzz_test
 ```
 
-Headlines: 800k API iterations + 900k chaos steps, **0 invariant
+Headlines: 1.2M API iterations (400k per class) + 900k chaos steps, **0 invariant
 violations**. The sweep: b0 off by 4× converges with zero steady-state
 error at every tested bandwidth; at 8× it degrades (slow if overestimated,
 oscillatory if underestimated). This fuzz found and fixed a real hole:

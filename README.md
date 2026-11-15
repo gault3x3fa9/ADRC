@@ -104,9 +104,9 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 |---|---|
 | `ADRC(&Input, &Output, &Setpoint, b0, ωc, ωo)` | Constructor. Invalid parameters are ignored; safe defaults are used. |
 | `bool Compute()` | Call every `loop()`. Runs only when a sample period elapsed; returns `true` if `Output` was updated. Non-finite (NaN/±Inf) readings are ignored with the output held; reentrant calls are safe no-ops. If absurd-but-accepted tunings make an observer state overflow, `Compute()` re-initialises the observer from the current sample (self-healing) and holds that round. |
-| `bool SetTunings(b0, ωc, ωo)` | Change tunings on the fly. Returns `false` and changes nothing for `b0 == 0`, subnormal or out-of-float-range values, NaN/Inf, ω ≤ 0, or ωo · dt > 0.5 at the current sample time. |
+| `bool SetTunings(b0, ωc, ωo)` | Change tunings on the fly. Returns `false` and changes nothing for `b0 == 0`, subnormal or out-of-float-range values, NaN/Inf, ω ≤ 0, ωo · dt > 0.5 at the current sample time, or derived gains (Kp = ωc², Kd = 2ωc, βi) that would overflow float. |
 | `void SetSampleTime(ms)` | Sampling period (default 10 ms). 0, > 4000000, or values that would make ωo · dt > 0.5 are ignored. |
-| `void SetOutputLimits(min, max)` | Saturation. Non-finite limits are ignored. The observer uses the saturated output, so it does not wind up. Default 0..255: on signed (bidirectional) plants set symmetric limits. |
+| `void SetOutputLimits(min, max)` | Saturation. Limits that are non-finite or do not survive narrowing to float (beyond float range, or min/max collapsing to equal values) are ignored; the previously set limits stay active. The observer uses the saturated output, so it does not wind up. Default 0..255: on signed (bidirectional) plants set symmetric limits. |
 | `bool SetSetpointRamp(rate)` | Slew-limit the internal reference, in (input units)/s: an abrupt `Setpoint` change becomes a controlled ramp (0 = disabled, default). Returns `false` for negative or non-finite rates. On `SetMode(AUTOMATIC)` the ramp restarts from the current `Input` (bumpless). `GetSetpointRamp()` reads it back. |
 | `bool SetInputFilter(hz)` | One-pole low-pass on the measurement, before the observer (cutoff in Hz, 0 = disabled, default). Attenuates sensor noise so a higher ωo stays usable; DC gain is exactly 1. Too low a cutoff adds lag and limits the achievable ωc. `GetInputFilter()` reads it back. |
 | `void SetMode(AUTOMATIC / MANUAL)` | Switching to `AUTOMATIC` initialises the observer from the current Input/Output: **bumpless transfer**. |
@@ -114,6 +114,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 | `bool IsObserverSafe()` | `true` if ωo · dt ≤ 0.5. |
 | `GetZ1() / GetZ2() / GetZ3()` | Estimated position (filtered), velocity, total disturbance. |
 | `GetB0() / GetOmegaC() / GetOmegaO()` | Current tunings. |
+| `bool SetNonlinearProfile(a1, a2, ao, dCtrl, dObs)` | *(NLADRC only)* Opt-in Han `fal` profile. Exponents of 1 (default) give exact linear equivalence; rejected for invalid values or fal coefficients (1/δ^(1−α)) that would overflow float. |
 
 ## Examples
 
@@ -125,7 +126,7 @@ The controller assumes the plant behaves like `y'' = f + b0·u`, where `f` is ev
 
 ## Measured results
 
-All evidence is generated from the real library code by the host test system in `extras/test/` — every number below is reproducible with the commands at the bottom of this page. Verification stack: 66 functional checks, 17 adversarial reproducers, a deterministic fuzz (800k random API iterations + 900k closed-loop chaos steps, 0 invariant violations — warning-free at `-std=gnu++11 -Wall -Wextra -Wpedantic` and clean under UBSan), and the ADRC-vs-PID benchmark below. The `SimulatedSystem` example was also run on real hardware (RP2040-class board): step response, disturbance rejection and observer tracking all match the simulation within sampling resolution.
+All evidence is generated from the real library code by the host test system in `extras/test/` — every number below is reproducible with the commands at the bottom of this page. Verification stack: 98 functional checks, 25 adversarial reproducers, a deterministic fuzz (1.2M random API iterations + 900k closed-loop chaos steps, 0 invariant violations — warning-free at `-std=gnu++11 -Wall -Wextra -Wpedantic` and clean under UBSan), and the ADRC-vs-PID benchmark below. The `SimulatedSystem` example was also run on real hardware (RP2040-class board): step response, disturbance rejection and observer tracking all match the simulation within sampling resolution.
 
 **Closed-loop usage campaign** (`usage_campaign`, see `extras/test/README.md`): six Arduino-typical scenarios — motor position, wheel speed with b0 off by ±2×, thermal plant with 0.8 s dead time, 8-bit PWM + 10-bit ADC + noise, reverse-acting Peltier (b0 < 0), square-wave tracking.
 
@@ -165,6 +166,8 @@ examples/SimulatedSystem   no-hardware demo
 examples/BasicUsage        hardware template
 extras/test                host test system: unit, robustness, ADRC-vs-PID
                            benchmark, usage campaign, stub Arduino.h
+extras/THEORY.md           math companion: LESO derivation, discrete
+                           stability, noise, anti-windup, limitations
 extras/python_simulation   Python mirror + plot generator
 extras/bench_avr           on-target CPU benchmark (Uno / simavr / Wokwi)
 keywords.txt, library.properties, LICENSE
@@ -190,6 +193,8 @@ Details, logs and reports: [`extras/test/README.md`](extras/test/README.md).
 ## Background
 
 LADRC and its bandwidth parameterisation come from Zhiqiang Gao, *"Scaling and bandwidth-parameterization based controller tuning"*, ACC 2003. The nonlinear variant and `fal` come from Jingqing Han's original ADRC work (1998–2009).
+
+For the full derivation behind the formulas above — LESO error dynamics, the exact discrete Euler stability limit (`ωo·dt < 2`) and why this library enforces 0.5, noise sensitivity scaling (`√ωo`), structural anti-windup, bumpless-transfer algebra, and the fal() definition — see **[extras/THEORY.md](extras/THEORY.md)**.
 
 ## License
 

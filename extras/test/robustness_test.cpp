@@ -144,6 +144,53 @@ int main() {
         CHECK(out <= 255.0 && out >= 0.0, "R10: asymmetric limits respected");
     }
 
+    // ------------------------------------------------------------------
+    // R11: omega_c so large that a derived gain (Kp = omega_c^2, or
+    // Kd = 2*omega_c) overflows float is rejected; the loop keeps running
+    // on the previous tunings
+    {
+        double Setpoint = 20, Input = 0, Output = 0;
+        g_micros = 0;
+        ADRC c(&Input, &Output, &Setpoint, 10, 4, 25);
+        c.SetOutputLimits(-100, 100); c.SetSampleTime(10); c.SetMode(AUTOMATIC);
+        CHECK(!c.SetTunings(10, 1e20, 25), "R11: omega_c=1e20 (Kp overflow) rejected");
+        CHECK(!c.SetTunings(10, 3e38, 25), "R11: omega_c=3e38 (Kd overflow) rejected");
+        CHECK(fabs(c.GetOmegaC() / 4.0 - 1.0) < 1e-6, "R11: previous omega_c still active");
+        double pos = 0, vel = 0;
+        for (double t = 0; t < 4.0; t += 0.001) {
+            double acc = -1.5 * vel - 0.5 * pos + 10 * Output;
+            vel += acc * 0.001; pos += vel * 0.001;
+            Input = pos;
+            g_micros = (unsigned long)(t * 1e6);
+            c.Compute();
+        }
+        CHECK(fabs(pos - 20) < 1.0, "R11: loop still converges after rejected extreme tunings");
+    }
+
+    // ------------------------------------------------------------------
+    // R12: output limits finite in double but +Inf after float narrowing
+    // (e.g. 1e300), or distinct in double but equal after rounding, are
+    // ignored: the previously set limits stay active and keep clamping
+    {
+        double in = 0, out = 0, sp = 1e9;
+        g_micros = 0;
+        ADRC c(&in, &out, &sp, 10, 40, 200);
+        c.SetOutputLimits(-100, 100); c.SetMode(AUTOMATIC);   // Initialize clamps
+        out = 500.0;
+        c.SetOutputLimits(-1e300, 1e300);       // float: -Inf..+Inf
+        c.Initialize();                         // clamps with the ACTIVE limits
+        CHECK(out == 100.0, "R12: float-overflowing limits ignored, old limits clamp");
+        out = -50.0;
+        c.SetOutputLimits(0, 1e300);            // outMax float +Inf
+        CHECK(out == -50.0, "R12: one-sided float-Inf limit ignored");
+        out = 50.0;
+        c.SetOutputLimits(1.0, 1.0 + 1e-15);    // collapses to 1.0f..1.0f
+        CHECK(out == 50.0, "R12: limits collapsing to equal floats ignored");
+        out = 500.0;
+        c.SetOutputLimits(-100, 100);           // valid again
+        CHECK(out == 100.0, "R12: valid limits clamp after the attack sequence");
+    }
+
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall adversarial inputs contained\n", failures);
     return failures ? 1 : 0;
 }

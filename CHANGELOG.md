@@ -3,6 +3,41 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
+## [1.2.1] — 2026-11-15
+
+### Corretto
+- **Overflow dei guadagni derivati in `SetTunings()`** (ADRC/NLADRC):
+  una ωc finita ma > ~1,8·10¹⁹ rendeva Kp = ωc² = +Inf (e ωc > ~1,7·10³⁸
+  mandava in overflow Kd = 2ωc) senza che alcuna guardia scattasse, perché i
+  controlli validano la ωc ma non i guadagni che ne derivano. Ora
+  `updateGains()` calcola tutto in variabili locali e rifiuta atomicamente
+  la taratura (rollback completo: la taratura precedente resta attiva).
+  Le β non potevano già overfloware in pratica (il limite ωo·dt ≤ 0,5 le
+  incatena a ωo ≤ 0,5/dt ≤ 500 rad/s), ora è garantito per costruzione.
+  ADRC1 è immune (Kp = ωc, non al quadrato) e il test lo certifica.
+- **Narrowing double→float dei limiti di uscita** (tutte e tre le classi):
+  `SetOutputLimits(-1e300, 1e300)` passava il controllo `isfinite(double)`
+  ma diventava ±Inf in float, disabilitando di fatto la saturazione;
+  analogamente, coppie distinte in double potevano collassare allo stesso
+  float (es. 1.0 e 1.0+1e-15), degenerando la saturazione in un pin.
+  Ora i limiti vengono prima convertiti in float e poi validati (finiti e
+  mn < mx); la conversione double→float è monotona, quindi Min < Max non
+  può mai invertirsi nel narrowing.
+- **Overflow dei coefficienti `fal` in NLADRC**: 1/δ^(1−α) diventa +Inf
+  con δ grande e α > 1 (es. α=3, δ=1e20: δ⁻² = 1e−40 subnormale, il
+  reciproco sfora FLT_MAX). `SetNonlinearProfile()` ora rifiuta e
+  mantiene il profilo attivo (rollback completo).
+
+### Aggiunto
+- `extras/THEORY.md`: derivazione del LESO, stabilità dell'osservatore
+  discreto (limite esatto ωo·dt < 2, margine operativo 0,5), effetto della
+  discretizzazione di Eulero, sensibilità al rumore (√ωo), anti-windup
+  strutturale, limiti della compensazione (dead time).
+- Test dei parametri estremi: sezione 12 in `host_test.cpp` (17 check su
+  overflow dei guadagni derivati, narrowing dei limiti, rollback) e
+  R11/R12 in `robustness_test.cpp`, con aggiornamento della mappatura
+  1:1 fix↔reproduttore in `extras/test/README.md`.
+
 ## [1.2.0] — 2026-11-14
 
 ### Aggiunto

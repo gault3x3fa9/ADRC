@@ -104,9 +104,9 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 |---|---|
 | `ADRC(&Input, &Output, &Setpoint, b0, ωc, ωo)` | Costruttore. I parametri non validi vengono ignorati; si usano default sicuri. |
 | `bool Compute()` | Da chiamare a ogni `loop()`. Calcola solo quando è trascorso il periodo di campionamento; restituisce `true` se `Output` è stato aggiornato. Le letture non finite (NaN/±Inf) vengono ignorate con uscita congelata; le chiamate rientranti sono no-op sicure. Se tarature assurde-ma-accettate fanno overfloware uno stato dell'osservatore, `Compute()` re-inizializza l'osservatore dalla misura corrente (auto-riparazione) e tiene l'uscita per quel giro. |
-| `bool SetTunings(b0, ωc, ωo)` | Cambia la taratura al volo. Restituisce `false` senza modificare nulla per `b0 == 0`, valori subnormali o fuori range float, NaN/Inf, ω ≤ 0, oppure ωo · dt > 0.5 al tempo di campionamento attuale. |
+| `bool SetTunings(b0, ωc, ωo)` | Cambia la taratura al volo. Restituisce `false` senza modificare nulla per `b0 == 0`, valori subnormali o fuori range float, NaN/Inf, ω ≤ 0, ωo · dt > 0.5 al tempo di campionamento attuale, oppure guadagni derivati (Kp = ωc², Kd = 2ωc, βi) che sforerebbero il float. |
 | `void SetSampleTime(ms)` | Periodo di campionamento (default 10 ms). 0, > 4000000, o valori che renderebbero ωo · dt > 0.5 vengono ignorati. |
-| `void SetOutputLimits(min, max)` | Saturazione. Limiti non finiti ignorati. L'osservatore usa l'uscita saturata, quindi non va in windup. Default 0..255: su sistemi bidirezionali imposta limiti simmetrici. |
+| `void SetOutputLimits(min, max)` | Saturazione. Limiti non finiti o che non sopravvivono al narrowing in float (fuori range float, o min/max che collassano allo stesso valore) sono ignorati; restano attivi i limiti precedenti. L'osservatore usa l'uscita saturata, quindi non va in windup. Default 0..255: su sistemi bidirezionali imposta limiti simmetrici. |
 | `bool SetSetpointRamp(rate)` | Limita la pendenza del riferimento interno, in (unità di input)/s: un cambiamento brusco del `Setpoint` diventa una rampa controllata (0 = disattivata, default). Restituisce `false` per rate negative o non finite. Con `SetMode(AUTOMATIC)` la rampa riparte dall'`Input` corrente (bumpless). `GetSetpointRamp()` la rilegge. |
 | `bool SetInputFilter(hz)` | Filtro passa-basso a un polo sulla misura, prima dell'osservatore (cutoff in Hz, 0 = disattivo, default). Attenua il rumore del sensore così resta utilizzabile un ωo alto; guadagno DC esattamente 1. Un cutoff troppo basso aggiunge ritardo e limita il ωc raggiungibile. `GetInputFilter()` lo rilegge. |
 | `void SetMode(AUTOMATIC / MANUAL)` | Passando ad `AUTOMATIC` l'osservatore viene inizializzato da Input/Output correnti: **bumpless transfer**. |
@@ -114,6 +114,7 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 | `bool IsObserverSafe()` | `true` se ωo · dt ≤ 0.5. |
 | `GetZ1() / GetZ2() / GetZ3()` | Posizione stimata (filtrata), velocità e disturbo totale stimati. |
 | `GetB0() / GetOmegaC() / GetOmegaO()` | Taratura corrente. |
+| `bool SetNonlinearProfile(a1, a2, ao, dCtrl, dObs)` | *(solo NLADRC)* Profilo `fal` di Han, opt-in. Esponenti a 1 (default) = equivalenza lineare esatta; rifiutato per valori invalidi o coefficienti fal (1/δ^(1−α)) che sforerebbero il float. |
 
 ## Esempi
 
@@ -125,7 +126,7 @@ Il controllore assume che il sistema si comporti come `y'' = f + b0·u`, dove `f
 
 ## Risultati misurati
 
-Tutte le evidenze sono generate dal codice reale della libreria tramite il sistema di test su PC in `extras/test/` — ogni numero qui sotto è riproducibile con i comandi in fondo alla pagina. Stack di verifica: 66 check funzionali, 17 riproduttori avversariali, un fuzz deterministico (800k iterazioni API casuali + 900k passi di chaos in closed loop, 0 violazioni di invariante — senza warning con `-std=gnu++11 -Wall -Wextra -Wpedantic` e pulito sotto UBSan), e il benchmark ADRC-vs-PID qui sotto. L'esempio `SimulatedSystem` è stato inoltre eseguito su hardware reale (scheda classe RP2040): risposta al gradino, reiezione del disturbo e tracking dell'osservatore combaciano con la simulazione entro la risoluzione di campionamento.
+Tutte le evidenze sono generate dal codice reale della libreria tramite il sistema di test su PC in `extras/test/` — ogni numero qui sotto è riproducibile con i comandi in fondo alla pagina. Stack di verifica: 98 check funzionali, 25 riproduttori avversariali, un fuzz deterministico (1,2M iterazioni API casuali + 900k passi di chaos in closed loop, 0 violazioni di invariante — senza warning con `-std=gnu++11 -Wall -Wextra -Wpedantic` e pulito sotto UBSan), e il benchmark ADRC-vs-PID qui sotto. L'esempio `SimulatedSystem` è stato inoltre eseguito su hardware reale (scheda classe RP2040): risposta al gradino, reiezione del disturbo e tracking dell'osservatore combaciano con la simulazione entro la risoluzione di campionamento.
 
 **Campagna casi d'uso** (`usage_campaign`, vedi `extras/test/README.md`): sei scenari tipici Arduino — posizione motore, velocità con b0 sbagliata ±2×, termica con ritardo 0.8 s, PWM 8 bit + ADC 10 bit + rumore, Peltier inversa (b0 < 0), tracking a onda quadra.
 
@@ -165,6 +166,8 @@ examples/SimulatedSystem   demo senza hardware
 examples/BasicUsage        template per hardware
 extras/test                sistema di test su PC: unitari, robustezza,
                            benchmark ADRC vs PID, campagna casi d'uso, stub Arduino.h
+extras/THEORY.md           derivazione matematica: LESO, stabilità discreta,
+                           rumore, anti-windup, limiti
 extras/python_simulation   specchio in Python + generatore del grafico
 extras/bench_avr           benchmark CPU sul target (Uno / simavr / Wokwi)
 keywords.txt, library.properties, LICENSE
@@ -190,6 +193,8 @@ Dettagli, log e report: [`extras/test/README.md`](extras/test/README.md).
 ## Riferimenti
 
 Il LADRC e la sua parametrizzazione in banda derivano da Zhiqiang Gao, *"Scaling and bandwidth-parameterization based controller tuning"*, ACC 2003. La variante non lineare e `fal` derivano dai lavori originali di Jingqing Han (1998–2009).
+
+Per la derivazione completa dietro le formule qui sopra — dinamica d'errore del LESO, limite esatto di stabilità dell'Eulero discreto (`ωo·dt < 2`) e perché la libreria impone 0,5, scalatura della sensibilità al rumore (`√ωo`), anti-windup strutturale, algebra del bumpless transfer e definizione di fal() — vedi **[extras/THEORY.md](extras/THEORY.md)**.
 
 ## Licenza
 

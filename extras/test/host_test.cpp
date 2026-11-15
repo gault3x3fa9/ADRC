@@ -534,6 +534,103 @@ int main() {
         CHECK(n.Compute() == false, "NLADRC: null pointers, no crash");
     }
 
+    // 12. Extreme-parameter hardening: derived-gain overflow and float
+    //     narrowing of output limits (review findings 6.1 / 6.2)
+    {
+        // 12a. omega_c beyond sqrt(FLT_MAX) makes Kp = omega_c^2 = +Inf:
+        // rejected; previous tunings stay active (checked via getters).
+        double in = 0, out = 0, sp = 0;
+        ADRC c(&in, &out, &sp, 10, 4, 25);
+        CHECK(c.SetTunings(10.0, 1e19, 25.0),
+              "extreme: omega_c = 1e19 accepted (Kp ~ 1e38 stays finite)");
+        CHECK(!c.SetTunings(10.0, 1e20, 25.0),
+              "extreme: omega_c = 1e20 rejected (Kp = omega_c^2 overflows float)");
+        CHECK(fabs(c.GetOmegaC() / 1e19 - 1.0) < 1e-6,
+              "extreme: rejected Kp overflow leaves the old omega_c active");
+        CHECK(!c.SetTunings(10.0, 3e38, 25.0),
+              "extreme: omega_c = 3e38 rejected (Kd = 2*omega_c overflows float)");
+        CHECK(fabs(c.GetOmegaC() / 1e19 - 1.0) < 1e-6,
+              "extreme: rejected Kd overflow rolls back fully");
+
+        // 12b. ADRC1 has no squared gain: the full float omega_c range is safe
+        ADRC1 c1(&in, &out, &sp, 10, 4, 25);
+        CHECK(c1.SetTunings(10.0, 3e38, 25.0),
+              "extreme: ADRC1 accepts omega_c = 3e38 (Kp = omega_c, no squaring)");
+
+        // 12c. NLADRC shares the 2nd-order formulas with ADRC
+        NLADRC cn(&in, &out, &sp, 10, 4, 25);
+        CHECK(!cn.SetTunings(10.0, 1e20, 25.0),
+              "extreme: NLADRC rejects omega_c = 1e20 (Kp overflow)");
+
+        // 12d. output limits finite as double but Inf after float narrowing
+        // (or collapsing to equal floats) are ignored: the previously set
+        // limits stay active and keep clamping (checked in AUTOMATIC,
+        // where accepted limits clamp immediately).
+        {
+            double i2 = 0, o2 = 0, s2 = 0;
+            ADRC d(&i2, &o2, &s2, 10, 4, 25);
+            d.SetOutputLimits(-100, 100);
+            d.SetMode(AUTOMATIC);
+            o2 = 500.0;
+            d.SetOutputLimits(-1e300, 1e300);      // float: -Inf..+Inf
+            d.Initialize();                        // clamps with the ACTIVE limits
+            CHECK(o2 == 100.0,
+                  "extreme: float-Inf limits ignored, old limits still clamp");
+            o2 = -50.0;
+            d.SetOutputLimits(0, 1e300);           // outMax -> +Inf
+            CHECK(o2 == -50.0,
+                  "extreme: one-sided float-Inf limit ignored (no clamp to 0)");
+            o2 = 50.0;
+            d.SetOutputLimits(1.0, 1.0 + 1e-15);   // both round to 1.0f
+            CHECK(o2 == 50.0,
+                  "extreme: limits collapsing to equal floats ignored");
+            o2 = 500.0;
+            d.SetOutputLimits(-200, 200);          // valid
+            CHECK(o2 == 200.0,
+                  "extreme: valid limits clamp immediately after the attack");
+
+            // 12d'. the same narrowing guard holds on the companion classes
+            ADRC1 e(&i2, &o2, &s2, 10, 4, 25);
+            e.SetOutputLimits(-100, 100); e.SetMode(AUTOMATIC);
+            o2 = 500.0;
+            e.SetOutputLimits(-1e300, 1e300);
+            e.Initialize();
+            CHECK(o2 == 100.0, "extreme: ADRC1 ignores float-Inf limits");
+            NLADRC f(&i2, &o2, &s2, 10, 4, 25);
+            f.SetOutputLimits(-100, 100); f.SetMode(AUTOMATIC);
+            o2 = 500.0;
+            f.SetOutputLimits(-1e300, 1e300);
+            f.Initialize();
+            CHECK(o2 == 100.0, "extreme: NLADRC ignores float-Inf limits");
+        }
+
+        // 12e. valid large float range is still accepted
+        {
+            double i3 = 0, o3 = 0, s3 = 0;
+            ADRC g(&i3, &o3, &s3, 10, 4, 25);
+            g.SetOutputLimits(-1e30, 1e30);
+            g.SetMode(AUTOMATIC);
+            o3 = 2e30;
+            g.Initialize();
+            CHECK(fabs(o3 / 1e30 - 1.0) < 1e-6,
+                  "extreme: float-representable 1e30 limits accepted and enforced");
+        }
+
+        // 12f. NLADRC: a fal profile whose 1/delta^(1-alpha) coefficient
+        // overflows float (alpha=3, delta=1e20 -> delta^-2 = 1e-40
+        // subnormal -> 1/... = Inf) is rejected, previous profile stays.
+        {
+            double i4 = 0, o4 = 0, s4 = 0;
+            NLADRC h(&i4, &o4, &s4, 10, 4, 25);
+            CHECK(h.SetNonlinearProfile(0.75, 1.5, 0.5, 1.0, 1.0),
+                  "extreme: baseline fal profile accepted");
+            CHECK(!h.SetNonlinearProfile(3.0, 1.0, 1.0, 1e20, 1.0),
+                  "extreme: fal coefficient overflow profile rejected");
+            CHECK(h.GetAlpha1() == 0.75 && h.GetDeltaCtrl() == 1.0,
+                  "extreme: rejected fal profile rolls back");
+        }
+    }
+
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

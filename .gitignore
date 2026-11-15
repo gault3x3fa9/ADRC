@@ -11,6 +11,7 @@ layout.json
 *.dll
 *.exe
 *.out
+*.pdb
 host_test
 robustness_test
 benchmark
