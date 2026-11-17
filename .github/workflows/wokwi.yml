@@ -1,0 +1,69 @@
+name: Wokwi
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  simulate-uno:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install arduino-cli and avr core
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=/usr/local/bin sh
+          arduino-cli version
+          arduino-cli core update-index
+          arduino-cli core install arduino:avr
+
+      - name: Build SimulatedSystem for Uno
+        run: |
+          arduino-cli compile --fqbn arduino:avr:uno --library . \
+            --build-path extras/wokwi examples/SimulatedSystem/SimulatedSystem.ino
+
+      - name: Run Wokwi simulation (captures serial)
+        uses: wokwi/wokwi-ci-action@v1
+        with:
+          token: ${{ secrets.WOKWI_CLI_TOKEN }}
+          path: extras/wokwi
+          timeout: '15000'
+          expect_text: 'Position:'
+          fail_text: 'WARNING'
+          serial_log_file: wokwi-serial.log
+
+      - name: Gate - convergence numbers from the serial log
+        run: |
+          python3 - <<'PYEOF'
+          import re
+          rows = []
+          for line in open('wokwi-serial.log', errors='replace'):
+              if line.startswith('Setpoint:'):
+                  m = dict(re.findall(r'(\w+):([-+0-9.eE]+)', line))
+                  try:
+                      rows.append((float(m['Setpoint']), float(m['Position']),
+                                   float(m['EstimatedDisturbance']), float(m['TotalDisturbance'])))
+                  except KeyError:
+                      pass
+          assert rows, "no CSV rows captured"
+          print("captured %d CSV rows" % len(rows))
+          sp, pos, est, tot = rows[-1]
+          err = abs(pos - sp)
+          print("final: |Position-Setpoint| = %.4f  (z3=%.3f, true f=%.3f)" % (err, est, tot))
+          assert err < 0.5, "not converged: err=%.4f" % err
+          assert abs(est - tot) < 1.0, "z3 not tracking f: %.3f vs %.3f" % (est, tot)
+          # disturbance window: t in [5,10] s -> rows ~[249,500] (50 rows/s)
+          dip = max(abs(p - s) for s, p, _, _ in rows[240:500])
+          print("max dip during the -30 disturbance: %.4f" % dip)
+          assert dip < 1.5, "disturbance dip too large: %.4f" % dip
+          print("WOKWI GATE OK: converged, z3 tracks f, dip contained")
+          PYEOF
+
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wokwi-serial-log
+          path: wokwi-serial.log

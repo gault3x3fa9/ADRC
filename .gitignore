@@ -20,6 +20,11 @@ usage_campaign
 # Generated test evidence (rerun the tools to recreate)
 extras/test/results/
 
+# Wokwi build artifacts (rebuilt by CI)
+extras/wokwi/*.hex
+extras/wokwi/*.elf
+extras/wokwi/serial.log
+
 # Python
 __pycache__/
 *.pyc
