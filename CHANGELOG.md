@@ -27,6 +27,11 @@ Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
   con δ grande e α > 1 (es. α=3, δ=1e20: δ⁻² = 1e−40 subnormale, il
   reciproco sfora FLT_MAX). `SetNonlinearProfile()` ora rifiuta e
   mantiene il profilo attivo (rollback completo).
+- **Igiene dei metadati pre-pubblicazione**: URL del repository
+  rinominato in `library.properties` (il vecchio `ADRC` funzionava solo
+  via redirect), intestazione della LICENSE completata con l'autore
+  (era il placeholder "Your Name"), badge CI di README/LEGGIMI puntati
+  al nuovo path.
 
 ### Aggiunto
 - `extras/THEORY.md`: derivazione del LESO, stabilità dell'osservatore

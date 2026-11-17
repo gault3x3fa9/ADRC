@@ -1,6 +1,6 @@
 # ADRC — Active Disturbance Rejection Control for Arduino
 
-[![CI](https://github.com/gault3x3fa9/ADRC/actions/workflows/ci.yml/badge.svg)](https://github.com/gault3x3fa9/ADRC/actions/workflows/ci.yml)
+[![CI](https://github.com/gault3x3fa9/ADRC-Controller-Arduino-Library/actions/workflows/ci.yml/badge.svg)](https://github.com/gault3x3fa9/ADRC-Controller-Arduino-Library/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 🇮🇹 [Leggimi in italiano](LEGGIMI.md)
