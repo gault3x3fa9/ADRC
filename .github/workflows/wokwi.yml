@@ -29,8 +29,9 @@ jobs:
         with:
           token: ${{ secrets.WOKWI_CLI_TOKEN }}
           path: extras/wokwi
-          timeout: '15000'
-          expect_text: 'Position:'
+          # no expect_text: it makes wokwi-cli EXIT as soon as the text is
+          # seen (an assert, not a filter) - we want the full timeout run
+          timeout: '20000'
           fail_text: 'WARNING'
           serial_log_file: wokwi-serial.log
 
