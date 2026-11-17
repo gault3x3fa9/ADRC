@@ -629,6 +629,57 @@ int main() {
             CHECK(h.GetAlpha1() == 0.75 && h.GetDeltaCtrl() == 1.0,
                   "extreme: rejected fal profile rolls back");
         }
+
+        // 12g. Initialize() with a user-written NaN Output: the bumpless
+        // base must stay finite (mid-range), not poison the observer.
+        // +/-Inf keep the clamp-to-limit behaviour.
+        {
+            double i5 = 0, o5 = 0, s5 = 0;
+            ADRC k(&i5, &o5, &s5, 10, 4, 25);
+            k.SetOutputLimits(-100, 100);
+            k.SetMode(AUTOMATIC);
+            o5 = NAN;                              // written by the user
+            k.Initialize();
+            CHECK(o5 == 0.0,
+                  "extreme: NaN Output replaced by the range midpoint");
+            CHECK(isfinite(k.GetZ3()),
+                  "extreme: observer finite after NaN Output init");
+            o5 = 1e300;                            // +Inf once narrowed
+            k.Initialize();
+            CHECK(o5 == 100.0,
+                  "extreme: float-Inf Output still clamps to outMax");
+            double o6 = NAN;
+            ADRC1 k1(&i5, &o6, &s5, 10, 4, 25);
+            k1.SetOutputLimits(-100, 100); k1.SetMode(AUTOMATIC);
+            k1.Initialize();
+            CHECK(o6 == 0.0, "extreme: ADRC1 NaN Output -> midpoint");
+            double o7 = NAN;
+            NLADRC kn(&i5, &o7, &s5, 10, 4, 25);
+            kn.SetOutputLimits(-100, 100); kn.SetMode(AUTOMATIC);
+            kn.Initialize();
+            CHECK(o7 == 0.0, "extreme: NLADRC NaN Output -> midpoint");
+        }
+
+        // 12h. Input filter with w = 2*pi*fc*dt overflowing float to +Inf
+        // after a sample-time increase: alpha degrades to 1 (passthrough),
+        // never NaN
+        {
+            double i8 = 10, o8 = 0, s8 = 10;
+            g_micros = 1000000000UL;               // 1000 s
+            ADRC1 f(&i8, &o8, &s8, 10, 2, 0.001);  // slow observer: big dt ok
+            CHECK(f.SetInputFilter(1e38),
+                  "extreme: fc = 1e38 accepted at 10 ms (w finite)");
+            f.SetSampleTime(400000);              // 400 s: omega_o*dt = 0.4, accepted
+            f.SetMode(AUTOMATIC);                  // Initialize at t = 1e9
+            g_micros = 1000000000UL + 400000001UL; // one period + 1 us
+            CHECK(f.Compute(),
+                  "extreme: w = +Inf filter step computes (alpha -> 1)");
+            g_micros += 400000001UL;               // second period
+            CHECK(f.Compute(),
+                  "extreme: passthrough keeps computing on later steps");
+            CHECK(isfinite(o8) && isfinite(f.GetZ1()),
+                  "extreme: output and observer finite with degenerate alpha");
+        }
     }
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);

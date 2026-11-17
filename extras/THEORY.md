@@ -116,7 +116,7 @@ equivalent noise bandwidth:
     var(z3) = (N0/2)·(1/π)·∫₀^∞ |ωo³/(jω+ωo)³|² dω = (N0/2)·(3·ωo/16)
 
 i.e. **actuator noise grows as √ωo**: halving ωo cuts jitter by ≈1.4×.
-(The first-order observer gives var(z2) = (N0/2)·ωo/8 — one more reason
+(The first-order observer gives var(z2) = (N0/2)·ωo/4 — one more reason
 ADRC1 is calmer on slow plants.) This is the fundamental LESO trade-off:
 ωo must be fast enough to track f, slow enough not to amplify sensor
 noise. The benchmark shows the practical shape of this trade-off: with 2%

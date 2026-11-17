@@ -3,6 +3,46 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
+## [2.0.0] — 2026-11-17
+
+La 2.0.0 chiude l'era 1.x: con NLADRC la libreria copre tre controllori
+(lineare 2° ordine, lineare 1° ordine, non lineare di Han, opt-in), il
+core numerico è passato da due pass di hardening e la documentazione
+include la derivazione teorica (`extras/THEORY.md`). Nessuna API cambia
+firma o semantica: il salto di major celebra il perimetro della libreria,
+non una rottura di compatibilità.
+
+### Corretto
+- **`Initialize()` non propaga più un Output NaN scritto dall'utente**
+  (ADRC/ADRC1/NLADRC): un NaN passava indenne i clamp e finiva nella base
+  bumpless (f = −b0·u = NaN), brickando l'osservatore al primo avvio
+  fino al self-healing. Ora un NaN è sostituito dal punto medio
+  dell'intervallo di uscita (calcolato in double: la somma di due float
+  finiti non straripa mai); ±Inf continuano a essere clampati al limite.
+- **Il filtro ingresso non degenera più con w = 2π·fc·dt = +Inf**: una fc
+  accettabile in float poteva diventare α = Inf/Inf = NaN dopo un
+  aumento del sample time, avvelenando yFilt (l'osservatore si
+  auto-riparava ma la risposta restava bloccata un ciclo). Ora una α non
+  finita degenera a 1 (passthrough — il limite fisico con cutoff ≫
+  Nyquist) e `SetInputFilter()` rifiuta in partenza le fc il cui w
+  straripa float al dt corrente (rollback completo).
+- **Prodotto `2ULL * sampleTimeUs` a 64 bit**: con sample time > ~35.8
+  minuti la soglia `2UL * sampleTimeUs` wrappava a 32 bit (effetto solo
+  conservativo, mai destabilizzante — ora è esatta).
+- Typo in `extras/THEORY.md`: var(z2) dell'osservatore del primo ordine
+  = (N₀/2)·ωₒ/4 (banda equivalente di ωₒ²/(s+ωₒ)²), non ωₒ/8.
+
+### Aggiunto
+- Riproduttori R13/R14 in `robustness_test.cpp` e casi 12g/12h in
+  `host_test.cpp`, mappati 1:1 ai fix qui sopra (mappa aggiornata in
+  `extras/test/README.md`).
+
+### Cambiato
+- Header: documentato il fallback del costruttore su tarature invalide
+  (default sicuri, verifica via getter) e riscritta la nota sul latch di
+  reentrancy in `Compute()`.
+- CI: `actions/checkout` v4 → v5 (risolve gli avvisi Node 20 deprecato).
+
 ## [1.2.1] — 2026-11-15
 
 ### Corretto

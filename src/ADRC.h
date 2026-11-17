@@ -35,6 +35,10 @@ public:
     // b0       : estimated input gain of the plant (must be non-zero)
     // omega_c  : controller bandwidth [rad/s] (> 0). Settling time ~ 6 / omega_c
     // omega_o  : observer bandwidth [rad/s] (> 0). Typically 3..10 x omega_c
+    // Invalid tunings never leave the object half-built: the constructor
+    // falls back to safe defaults (b0=1, omega_c=1, omega_o=5) - verify
+    // with the getters when constructing from untrusted values. The
+    // controller starts in MANUAL: call SetMode(AUTOMATIC) to enable it.
     ADRC(double* Input, double* Output, double* Setpoint,
          double b0, double omega_c, double omega_o);
 
@@ -44,11 +48,12 @@ public:
     // that has gone out of scope is undefined behaviour, as with the PID
     // library this API is modelled on.
 
-    // Call as often as possible inside loop(). Runs the algorithm only when a
-    // sample period has elapsed. Returns true when a new Output was computed.
-    // Single call site only: calling it from an ISR while loop() also calls
-    // it is made harmless by a reentrancy latch (the nested call just returns
-    // false), but sampling would become irregular.
+    // Call as often as possible inside loop(). Runs the algorithm only when
+    // a sample period has elapsed; returns true when a new Output was
+    // computed. Nested/concurrent calls (e.g. an ISR invoking it while
+    // loop() does too) are made harmless by a reentrancy latch: the nested
+    // call just returns false. In practice drive it from ONE call site:
+    // with more than one, sampling becomes irregular.
     bool Compute();
 
     // Change tunings on the fly. Returns false (and changes nothing) if a
@@ -89,7 +94,9 @@ public:
     // stays usable with noisy/quantised sensors. 0 disables it (default).
     // DC gain is exactly 1 (no steady-state bias); too low a cutoff adds
     // phase lag and limits the achievable omega_c. Returns false (and
-    // changes nothing) for negative or non-finite cutoffs.
+    // changes nothing) for negative or non-finite cutoffs, or a cutoff
+    // whose 2*pi*fc*dt product overflows float at the current sample
+    // time (re-check after SetSampleTime).
     bool SetInputFilter(double cutoffHz);
     double GetInputFilter() const { return filtHz; }
 
@@ -167,6 +174,8 @@ private:
 */
 class ADRC1 {
 public:
+    // Same contract as ADRC: invalid tunings fall back to safe defaults,
+    // the controller starts in MANUAL.
     ADRC1(double* Input, double* Output, double* Setpoint,
           double b0, double omega_c, double omega_o);
 
@@ -234,6 +243,8 @@ private:
 */
 class NLADRC {
 public:
+    // Same contract as ADRC: invalid tunings fall back to safe defaults,
+    // the controller starts in MANUAL.
     NLADRC(double* Input, double* Output, double* Setpoint,
            double b0, double omega_c, double omega_o);
 

@@ -191,6 +191,54 @@ int main() {
         CHECK(out == 100.0, "R12: valid limits clamp after the attack sequence");
     }
 
+    // ------------------------------------------------------------------
+    // R13: a NaN written by the user into *Output has no ordering and used
+    // to leak into the bumpless base (f = -b0*u = NaN): it is replaced by
+    // the middle of the output range; +/-Inf keep clamping to the limits
+    {
+        double in = 0, out = 0, sp = 10;
+        g_micros = 0;
+        ADRC c(&in, &out, &sp, 10, 4, 25);
+        c.SetOutputLimits(-100, 100); c.SetMode(AUTOMATIC);
+        out = NAN;
+        c.Initialize();
+        CHECK(out == 0.0, "R13: NaN Output -> midpoint, observer usable");
+        CHECK(isfinite(c.GetZ3()), "R13: bumpless base finite after NaN init");
+        out = -1e300;                              // -Inf in float
+        c.Initialize();
+        CHECK(out == -100.0, "R13: float-Inf Output still clamps to outMin");
+    }
+
+    // ------------------------------------------------------------------
+    // R14: input-filter cutoff whose w = 2*pi*fc*dt overflows float:
+    // rejected at set time with rollback; if the overflow appears only
+    // after a SetSampleTime() increase, alpha degrades to 1 (passthrough)
+    // and the filter never injects NaN
+    {
+        double in = 10, out = 0, sp = 10;
+        g_micros = 1000000000UL;
+        ADRC1 c(&in, &out, &sp, 10, 2, 0.001);
+        c.SetSampleTime(400000);                  // 400 s: omega_o*dt = 0.4, accepted
+        CHECK(c.SetInputFilter(1e30),
+              "R14: fc = 1e30 accepted at 400 s (w finite)");
+        CHECK(!c.SetInputFilter(1e36),
+              "R14: fc = 1e36 rejected (w = 2*pi*fc*dt overflows float)");
+        CHECK(fabs(c.GetInputFilter() / 1e30 - 1.0) < 1e-6,
+              "R14: rejected cutoff rolls back to the previous value");
+
+        // degenerate-alpha path: fc valid when set, w = +Inf after the
+        // sample-time increase
+        double out2 = 0;
+        ADRC d(&in, &out2, &sp, 10, 2, 0.001);
+        CHECK(d.SetInputFilter(1e38), "R14: fc = 1e38 accepted at 10 ms");
+        d.SetSampleTime(400000);                  // slow observer allows 400 s
+        d.SetMode(AUTOMATIC);
+        g_micros = 1000000000UL + 400000001UL;
+        CHECK(d.Compute(), "R14: w = +Inf step computes (alpha -> 1 passthrough)");
+        CHECK(isfinite(out2) && isfinite(d.GetZ1()),
+              "R14: output and observer finite with degenerate alpha");
+    }
+
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall adversarial inputs contained\n", failures);
     return failures ? 1 : 0;
 }

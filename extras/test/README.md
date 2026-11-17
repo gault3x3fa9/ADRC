@@ -47,13 +47,17 @@ low there); the benchmark prints a NOTE.
 
 ## 3. Robustness / adversarial tests — `robustness_test.cpp`
 
-Executable reproducers for every numeric-safety claim (IDs R1–R12): NaN/Inf
+Executable reproducers for every numeric-safety claim (IDs R1–R14): NaN/Inf
 sensor readings, denormal `b0`, absurd `omega_o`, `micros()` rollover at
 2^32, loop stalls, guard rails. All adversarial inputs are **contained**
-(post-hardening); every hardening fix is mapped one-to-one to the R1–R12
+(post-hardening); every hardening fix is mapped one-to-one to the R1–R14
 cases in `robustness_test.cpp`. R11 = derived-gain overflow (Kp = ωc²) in
 `SetTunings()`, R12 = output limits that do not survive double→float
 narrowing (±Inf, or collapse to equal floats) in `SetOutputLimits()`.
+R13 = NaN written by the user into `*Output` at `Initialize()` (replaced
+by the range midpoint), R14 = input-filter cutoff whose w = 2π·fc·dt
+overflows float (rejected at set time; α→1 passthrough after a later
+`SetSampleTime()` increase).
 
 ```bash
 python -m ziglang cc -Wall -I extras/test/stub -I src \

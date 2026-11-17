@@ -8,7 +8,7 @@ jobs:
   host-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and run host tests
         run: |
           g++ -Wall -Wextra -I extras/test/stub -I src \
@@ -18,7 +18,7 @@ jobs:
   robustness-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and run adversarial robustness tests
         run: |
           g++ -Wall -I extras/test/stub -I src \
@@ -28,7 +28,7 @@ jobs:
   fuzz-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and run deterministic fuzz tests
         run: |
           g++ -O2 -Wall -Wextra -std=gnu++11 -I extras/test/stub -I src \
@@ -38,7 +38,7 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: "ADRC vs PID effectiveness benchmark (gate: ADRC must not regress)"
         run: |
           g++ -O2 -Wall -I extras/test/stub -I src \
@@ -48,7 +48,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: arduino/arduino-lint-action@v2
         with:
           library-manager: submit
@@ -68,7 +68,7 @@ jobs:
               - name: esp32:esp32
                 source-url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: arduino/compile-sketches@v1
         with:
           fqbn: ${{ matrix.fqbn }}

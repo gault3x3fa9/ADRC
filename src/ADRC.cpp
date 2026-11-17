@@ -139,6 +139,13 @@ bool ADRC::SetInputFilter(double cutoffHz) {
     if (!isfinite(cutoffHz) || cutoffHz < 0.0) return false;
     float f = (float)cutoffHz;
     if (!isfinite(f)) return false;            // beyond float range
+    // A cutoff whose w = 2*pi*fc*dt overflows float at the CURRENT sample
+    // time is meaningless (alpha degenerates): reject it. Compute() clamps
+    // alpha defensively anyway, so a later SetSampleTime() stays safe.
+    // double arithmetic: a float 2*pi*fc would overflow before * dt even
+    // when the true product is finite (e.g. fc = 1e38, dt = 10 ms).
+    double wSet = 6.283185307179586 * f * dt;
+    if (f > 0.0f && !isfinite((float)wSet)) return false;
     filtHz = f;
     return true;
 }
@@ -154,8 +161,15 @@ void ADRC::SetMode(int Mode) {
 void ADRC::Initialize() {
     if (!myInput || !myOutput) return;   // never dereference a null pointer
 
+    // A NaN written by the user into *Output has no ordering: it passed
+    // both clamps untouched and leaked into the bumpless base (f = -b0*u
+    // = NaN). Replace it with the middle of the output range, computed in
+    // double (the sum of two finite floats always fits). +/-Inf keep the
+    // existing clamp-to-limit behaviour.
     float out = (float)*myOutput;
-    if (out > outMax) out = outMax;
+    if (isnan(out))
+        out = (float)(((double)outMin + (double)outMax) * 0.5);
+    else if (out > outMax) out = outMax;
     else if (out < outMin) out = outMin;
     *myOutput = out;
 
@@ -197,12 +211,16 @@ bool ADRC::Compute() {
 
     // Real time since the last computation; fall back to the nominal dt if
     // the loop stalled (a huge Euler step would destabilise the observer).
+    // The 2*sampleTimeUs guard is a 64-bit product: at 32 bits it would
+    // wrap for sample times above ~35.8 minutes.
+    // The 2*sampleTimeUs guard is a 64-bit product: at 32 bits it would
+    // wrap for sample times above ~35.8 minutes.
     unsigned long real = now - lastComputeUs;
-    float stepDt = (real <= 2UL * sampleTimeUs) ? (float)real * 1e-6f : dt;
+    float stepDt = (real <= 2ULL * sampleTimeUs) ? (float)real * 1e-6f : dt;
     lastComputeUs = now;
 
     // Drift-free scheduling; resynchronise if we fell badly behind.
-    if (elapsed < 2UL * sampleTimeUs) lastTime += sampleTimeUs;
+    if (elapsed < 2ULL * sampleTimeUs) lastTime += sampleTimeUs;
     else lastTime = now;
 
     float y = (float)*myInput;
@@ -216,6 +234,10 @@ bool ADRC::Compute() {
         else {
             float w = 6.2831853f * filtHz * stepDt;
             float alpha = w / (1.0f + w);
+            // w = +Inf (cutoff far above Nyquist at the current dt) gives
+            // alpha = Inf/Inf = NaN and would poison yFilt: the limit of
+            // w/(1+w) as w -> Inf is 1 (passthrough), use that instead.
+            if (!isfinite(alpha)) alpha = 1.0f;
             yFilt += alpha * (y - yFilt);
         }
         y = yFilt;                               // observer sees the filtered y
@@ -386,6 +408,13 @@ bool ADRC1::SetInputFilter(double cutoffHz) {
     if (!isfinite(cutoffHz) || cutoffHz < 0.0) return false;
     float f = (float)cutoffHz;
     if (!isfinite(f)) return false;
+    // A cutoff whose w = 2*pi*fc*dt overflows float at the CURRENT sample
+    // time is meaningless (alpha degenerates): reject it. Compute() clamps
+    // alpha defensively anyway, so a later SetSampleTime() stays safe.
+    // double arithmetic: a float 2*pi*fc would overflow before * dt even
+    // when the true product is finite (e.g. fc = 1e38, dt = 10 ms).
+    double wSet = 6.283185307179586 * f * dt;
+    if (f > 0.0f && !isfinite((float)wSet)) return false;
     filtHz = f;
     return true;
 }
@@ -401,8 +430,15 @@ void ADRC1::SetMode(int Mode) {
 void ADRC1::Initialize() {
     if (!myInput || !myOutput) return;
 
+    // A NaN written by the user into *Output has no ordering: it passed
+    // both clamps untouched and leaked into the bumpless base (f = -b0*u
+    // = NaN). Replace it with the middle of the output range, computed in
+    // double (the sum of two finite floats always fits). +/-Inf keep the
+    // existing clamp-to-limit behaviour.
     float out = (float)*myOutput;
-    if (out > outMax) out = outMax;
+    if (isnan(out))
+        out = (float)(((double)outMin + (double)outMax) * 0.5);
+    else if (out > outMax) out = outMax;
     else if (out < outMin) out = outMin;
     *myOutput = out;
 
@@ -432,10 +468,10 @@ bool ADRC1::Compute() {
     if (elapsed < sampleTimeUs) return false;
 
     unsigned long real = now - lastComputeUs;
-    float stepDt = (real <= 2UL * sampleTimeUs) ? (float)real * 1e-6f : dt;
+    float stepDt = (real <= 2ULL * sampleTimeUs) ? (float)real * 1e-6f : dt;
     lastComputeUs = now;
 
-    if (elapsed < 2UL * sampleTimeUs) lastTime += sampleTimeUs;
+    if (elapsed < 2ULL * sampleTimeUs) lastTime += sampleTimeUs;
     else lastTime = now;
 
     float y = (float)*myInput;
@@ -460,6 +496,10 @@ bool ADRC1::Compute() {
         else {
             float w = 6.2831853f * filtHz * stepDt;
             float alpha = w / (1.0f + w);
+            // w = +Inf (cutoff far above Nyquist at the current dt) gives
+            // alpha = Inf/Inf = NaN and would poison yFilt: the limit of
+            // w/(1+w) as w -> Inf is 1 (passthrough), use that instead.
+            if (!isfinite(alpha)) alpha = 1.0f;
             yFilt += alpha * (y - yFilt);
         }
         y = yFilt;
@@ -640,6 +680,13 @@ bool NLADRC::SetInputFilter(double cutoffHz) {
     if (!isfinite(cutoffHz) || cutoffHz < 0.0) return false;
     float f = (float)cutoffHz;
     if (!isfinite(f)) return false;
+    // A cutoff whose w = 2*pi*fc*dt overflows float at the CURRENT sample
+    // time is meaningless (alpha degenerates): reject it. Compute() clamps
+    // alpha defensively anyway, so a later SetSampleTime() stays safe.
+    // double arithmetic: a float 2*pi*fc would overflow before * dt even
+    // when the true product is finite (e.g. fc = 1e38, dt = 10 ms).
+    double wSet = 6.283185307179586 * f * dt;
+    if (f > 0.0f && !isfinite((float)wSet)) return false;
     filtHz = f;
     return true;
 }
@@ -683,8 +730,15 @@ void NLADRC::SetMode(int Mode) {
 void NLADRC::Initialize() {
     if (!myInput || !myOutput) return;
 
+    // A NaN written by the user into *Output has no ordering: it passed
+    // both clamps untouched and leaked into the bumpless base (f = -b0*u
+    // = NaN). Replace it with the middle of the output range, computed in
+    // double (the sum of two finite floats always fits). +/-Inf keep the
+    // existing clamp-to-limit behaviour.
     float out = (float)*myOutput;
-    if (out > outMax) out = outMax;
+    if (isnan(out))
+        out = (float)(((double)outMin + (double)outMax) * 0.5);
+    else if (out > outMax) out = outMax;
     else if (out < outMin) out = outMin;
     *myOutput = out;
 
@@ -715,10 +769,10 @@ bool NLADRC::Compute() {
     if (elapsed < sampleTimeUs) return false;
 
     unsigned long real = now - lastComputeUs;
-    float stepDt = (real <= 2UL * sampleTimeUs) ? (float)real * 1e-6f : dt;
+    float stepDt = (real <= 2ULL * sampleTimeUs) ? (float)real * 1e-6f : dt;
     lastComputeUs = now;
 
-    if (elapsed < 2UL * sampleTimeUs) lastTime += sampleTimeUs;
+    if (elapsed < 2ULL * sampleTimeUs) lastTime += sampleTimeUs;
     else lastTime = now;
 
     float y = (float)*myInput;
@@ -743,6 +797,10 @@ bool NLADRC::Compute() {
         else {
             float w = 6.2831853f * filtHz * stepDt;
             float alpha = w / (1.0f + w);
+            // w = +Inf (cutoff far above Nyquist at the current dt) gives
+            // alpha = Inf/Inf = NaN and would poison yFilt: the limit of
+            // w/(1+w) as w -> Inf is 1 (passthrough), use that instead.
+            if (!isfinite(alpha)) alpha = 1.0f;
             yFilt += alpha * (y - yFilt);
         }
         y = yFilt;
