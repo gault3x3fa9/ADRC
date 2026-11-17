@@ -33,6 +33,9 @@ jobs:
           # seen (an assert, not a filter) - we want the full timeout run
           timeout: '20000'
           fail_text: 'WARNING'
+          # a full-duration run ends AT the timeout: wokwi-cli exits 42 by
+          # default there - that is our success path, not a failure
+          args: --timeout-exit-code 0
           serial_log_file: wokwi-serial.log
 
       - name: Gate - convergence numbers from the serial log
