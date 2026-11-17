@@ -41,6 +41,18 @@ permanente e l'osservatore può sapere cosa ha fatto davvero l'attuatore.
 - Fuzz: l'harness ora replica esattamente la semantica float di
   `SetOutputLimits()` (narrowing double→float) nel tracciamento dei limiti.
 
+### Validato (hardware)
+- **Arduino GIGA R1 WiFi (STM32H747, Cortex-M7 @ 480 MHz)** — campagna
+  `extras/bench_giga/`, timing DWT ciclo-esatti + closed loop su pianta
+  simulata (nessun hardware esterno): ADRC 1.85 µs, ADRC1 1.77 µs,
+  NLADRC lineare 1.93 µs, profilo Han 3.06 µs, rampa+FF 2.27 µs (il
+  percorso caldo 2.1.0), hot path 1.04 µs — a 1 kHz il controllore più
+  costoso usa lo 0.31% di CPU. Closed loop: lag di rampa 0.19 (era ~5
+  pre-feedforward), dip da disturbo −30 = 0.37, errore finale 5e-4;
+  telemetria timing reale 9.998/10.007 ms, 0 campioni persi;
+  `SetAppliedOutput()` coerente sotto saturazione esterna ±10 (z3 ≈ 0.9,
+  il mismatch l'avrebbe inchiodato a ~−1500). 6/6 PASS.
+
 ### Test
 - Sezione 13 in `host_test.cpp`: lag di rampa quantificato (prima 2v/ωc e
   v/Kp, ora sotto soglia), coerenza dell'osservatore con saturazione
