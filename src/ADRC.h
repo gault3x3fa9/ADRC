@@ -12,6 +12,22 @@
 #endif
 
 /*
+  Telemetry snapshot returned by GetDiagnostics() - v2.1.0. A plain copy of
+  the controller's internal view: cheap to call, does not disturb the loop.
+*/
+struct ADRCDiagnostics {
+    double z1, z2, z3;            // observer states (z3 = 0 on ADRC1)
+    double reference;             // effective (ramped) reference
+    double trackingError;         // reference - z1
+    double lastCycleMs;           // actual dt of the last Compute() [ms]
+    double maxCycleMs;            // worst actual dt since construction [ms]
+    unsigned long missedSamples;  // computes that ran > 2x the nominal period
+    bool observerSafe;            // omega_o * dt <= 0.5
+    bool outputSaturated;         // last Output was at a limit
+    bool appliedPending;          // a SetAppliedOutput() is queued
+};
+
+/*
   Linear Active Disturbance Rejection Control (LADRC), 2nd order.
 
   Plant model assumed:   y'' = f(t) + b0 * u
@@ -112,6 +128,26 @@ public:
     // can become inaccurate or unstable: lower omega_o or the sample time.
     bool IsObserverSafe() const;
 
+    // ---- v2.1.0 ---------------------------------------------------------
+    // If something between the library and the actuator changes the command
+    // (external safety limits, deadband, PWM quantisation), tell the
+    // observer what was ACTUALLY applied: the value is used once as u(k-1)
+    // by the next Compute() and then discarded. Without a call the observer
+    // keeps using *Output. Returns false (keeping any pending value) for
+    // NaN/Inf.
+    bool SetAppliedOutput(double applied);
+
+    // Timing telemetry: actual inter-sample time of the last Compute(),
+    // worst since construction, and how many computes ran more than 2x the
+    // nominal period (the loop stalled and the observer used the fallback
+    // dt). Wrap-safe (micros() rollover included).
+    unsigned long GetLastCycleTimeUs() const { return lastCycleUs; }
+    unsigned long GetMaxCycleTimeUs() const { return maxCycleUs; }
+    unsigned long GetMissedSamples() const { return missedSamples; }
+
+    // One-shot telemetry snapshot of the controller's internal view.
+    ADRCDiagnostics GetDiagnostics() const;
+
     // Diagnostics
     double GetZ1() const { return z1; }  // Estimated position (filtered input)
     double GetZ2() const { return z2; }  // Estimated velocity
@@ -149,6 +185,12 @@ private:
 
     // Reentrancy latch (see Compute)
     bool computing;
+
+    // v2.1.0: applied-output feedback (one-shot) + timing telemetry
+    float appliedOut;
+    bool appliedValid;
+    unsigned long lastCycleUs, maxCycleUs, missedSamples;
+    bool outSaturated;
 
     // Timing (microsecond resolution, rollover-safe)
     unsigned long sampleTimeUs;
@@ -192,6 +234,26 @@ public:
     void Initialize();
     bool IsObserverSafe() const;
 
+    // ---- v2.1.0 ---------------------------------------------------------
+    // If something between the library and the actuator changes the command
+    // (external safety limits, deadband, PWM quantisation), tell the
+    // observer what was ACTUALLY applied: the value is used once as u(k-1)
+    // by the next Compute() and then discarded. Without a call the observer
+    // keeps using *Output. Returns false (keeping any pending value) for
+    // NaN/Inf.
+    bool SetAppliedOutput(double applied);
+
+    // Timing telemetry: actual inter-sample time of the last Compute(),
+    // worst since construction, and how many computes ran more than 2x the
+    // nominal period (the loop stalled and the observer used the fallback
+    // dt). Wrap-safe (micros() rollover included).
+    unsigned long GetLastCycleTimeUs() const { return lastCycleUs; }
+    unsigned long GetMaxCycleTimeUs() const { return maxCycleUs; }
+    unsigned long GetMissedSamples() const { return missedSamples; }
+
+    // One-shot telemetry snapshot of the controller's internal view.
+    ADRCDiagnostics GetDiagnostics() const;
+
     double GetZ1() const { return z1; }  // Estimated output (filtered input)
     double GetZ2() const { return z2; }  // Estimated total disturbance
     double GetB0() const { return b0; }
@@ -216,6 +278,12 @@ private:
     bool yFiltValid;
 
     bool computing;
+
+    // v2.1.0: applied-output feedback (one-shot) + timing telemetry
+    float appliedOut;
+    bool appliedValid;
+    unsigned long lastCycleUs, maxCycleUs, missedSamples;
+    bool outSaturated;
     unsigned long sampleTimeUs;
     unsigned long lastTime, lastComputeUs;
     float dt;
@@ -275,6 +343,26 @@ public:
     void Initialize();
     bool IsObserverSafe() const;
 
+    // ---- v2.1.0 ---------------------------------------------------------
+    // If something between the library and the actuator changes the command
+    // (external safety limits, deadband, PWM quantisation), tell the
+    // observer what was ACTUALLY applied: the value is used once as u(k-1)
+    // by the next Compute() and then discarded. Without a call the observer
+    // keeps using *Output. Returns false (keeping any pending value) for
+    // NaN/Inf.
+    bool SetAppliedOutput(double applied);
+
+    // Timing telemetry: actual inter-sample time of the last Compute(),
+    // worst since construction, and how many computes ran more than 2x the
+    // nominal period (the loop stalled and the observer used the fallback
+    // dt). Wrap-safe (micros() rollover included).
+    unsigned long GetLastCycleTimeUs() const { return lastCycleUs; }
+    unsigned long GetMaxCycleTimeUs() const { return maxCycleUs; }
+    unsigned long GetMissedSamples() const { return missedSamples; }
+
+    // One-shot telemetry snapshot of the controller's internal view.
+    ADRCDiagnostics GetDiagnostics() const;
+
     double GetZ1() const { return z1; }
     double GetZ2() const { return z2; }
     double GetZ3() const { return z3; }
@@ -306,6 +394,12 @@ private:
     bool yFiltValid;
 
     bool computing;
+
+    // v2.1.0: applied-output feedback (one-shot) + timing telemetry
+    float appliedOut;
+    bool appliedValid;
+    unsigned long lastCycleUs, maxCycleUs, missedSamples;
+    bool outSaturated;
     unsigned long sampleTimeUs;
     unsigned long lastTime, lastComputeUs;
     float dt;

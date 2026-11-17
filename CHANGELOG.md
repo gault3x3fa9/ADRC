@@ -3,6 +3,51 @@
 Tutte le modifiche notevoli a questo progetto saranno documentate qui.
 Il formato è basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 
+## [2.1.0] — 2026-11-17
+
+Tracking & telemetry: il riferimento in movimento non lascia più lag
+permanente e l'osservatore può sapere cosa ha fatto davvero l'attuatore.
+
+### Aggiunto
+- **Feedforward della derivata del riferimento (ṙ)**: la rampa generata
+  internamente ora alimenta anche il termine di velocità della legge di
+  controllo. Sparisce il lag permanente in inseguimento rampa: era
+  2·v/ωc per ADRC (es. v=10, ωc=4 → 5 unità di ritardo per tutta la
+  salita) e v/Kp per ADRC1. Con rampa disattivata il comportamento è
+  bit-identico a prima; NLADRC (profilo di default) resta esattamente
+  equivalente ad ADRC, con e senza rampa.
+- **`SetAppliedOutput(applied)`** (ADRC/ADRC1/NLADRC): comunica
+  all'osservatore l'uscita realmente applicata dall'attuatore (limiti di
+  sicurezza esterni, deadband, quantizzazione PWM). One-shot: valida per il
+  solo prossimo `Compute()`; NaN/Inf rifiutati. Senza chiamata l'osservatore
+  continua a usare `*Output`.
+- **Telemetria timing**: `GetLastCycleTimeUs()`, `GetMaxCycleTimeUs()`,
+  `GetMissedSamples()` — dt effettivo dell'ultimo ciclo, peggiore da
+  costruzione, e cicli saltati (dt reale > 2× nominale). Wrap-safe.
+- **`GetDiagnostics()`**: struct `ADRCDiagnostics` con stati stimati,
+  riferimento effettivo, errore di tracking, timing, flag di saturazione,
+  `observerSafe` e pending applied.
+
+### Corretto
+- **Un `Compute()` che fallisce non tocca più `*Output`** (invariante V2,
+  tutte e tre le classi): il self-healing dell'osservatore passava da
+  `Initialize()`, che può clampare l'uscita ai limiti correnti — quindi
+  un ciclo restituito `false` poteva modificare l'uscita. Emerso estendendo
+  la superficie API del fuzz a `SetAppliedOutput`.
+- **Il fallback NaN dell'uscita tiene l'uscita attuale** invece di
+  `uPrev`: con un `SetAppliedOutput()` pendente oltre i limiti, una
+  cancellazione Inf−Inf (tarature estreme) nel calcolo di u poteva
+  scrivere un valore fuori dai limiti. Scovato dal fuzz su 1.2M iterazioni.
+- Fuzz: l'harness ora replica esattamente la semantica float di
+  `SetOutputLimits()` (narrowing double→float) nel tracciamento dei limiti.
+
+### Test
+- Sezione 13 in `host_test.cpp`: lag di rampa quantificato (prima 2v/ωc e
+  v/Kp, ora sotto soglia), coerenza dell'osservatore con saturazione
+  esterna comunicata via `SetAppliedOutput()`, telemetria timing con uno
+  stall simulato.
+- Fuzz: `SetAppliedOutput` aggiunto alla superficie API casuale.
+
 ## [2.0.0] — 2026-11-17
 
 La 2.0.0 chiude l'era 1.x: con NLADRC la libreria copre tre controllori

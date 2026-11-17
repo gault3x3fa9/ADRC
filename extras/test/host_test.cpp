@@ -680,6 +680,138 @@ int main() {
             CHECK(isfinite(o8) && isfinite(f.GetZ1()),
                   "extreme: output and observer finite with degenerate alpha");
         }
+
+        // 13. v2.1.0 tracking & telemetry
+        // 13a. reference feedforward removes the standing ramp lag
+        //      (2nd-order law used to lag 2*v/omega_c during a slew)
+        {
+            double in = 0, out = 0, sp = 0;
+            g_micros = 0;
+            ADRC c(&in, &out, &sp, 10, 4, 25);
+            c.SetOutputLimits(-500, 500);
+            c.SetSampleTime(10);
+            c.SetSetpointRamp(10.0);          // 10 units/s
+            c.SetMode(AUTOMATIC);
+            double pos = 0, vel = 0, lagSum = 0;
+            int lagN = 0;
+            for (double t = 0.02; t <= 8.0; t += 0.01) {
+                sp = 40.0;                    // ramped internally at 10/s until t = 4
+                double acc = 10.0 * out;      // double integrator, b0 = 10
+                vel += acc * 0.01; pos += vel * 0.01;
+                in = pos;
+                g_micros = (unsigned long)(t * 1e6);
+                c.Compute();
+                if (t >= 2.0 && t < 3.9) {    // deep in the slew
+                    lagSum += 10.0 * t - pos; // rEff - y
+                    lagN++;
+                }
+            }
+            double lag = lagSum / lagN;       // old law: ~5.0 (2*v/omega_c)
+            CHECK(lag < 1.0,
+                  "tracking: ramp lag below 1 unit (was 2*v/omega_c = 5)");
+            CHECK(fabs(pos - 40.0) < 1.0,
+                  "tracking: converges to the ramped setpoint");
+        }
+        // 13a-2. same for ADRC1 (first-order law used to lag v/Kp)
+        {
+            double in = 0, out = 0, sp = 0;
+            g_micros = 0;
+            ADRC1 c(&in, &out, &sp, 10, 4, 25);
+            c.SetOutputLimits(-500, 500);
+            c.SetSampleTime(10);
+            c.SetSetpointRamp(10.0);
+            c.SetMode(AUTOMATIC);
+            double y = 0, lagSum = 0;
+            int lagN = 0;
+            for (double t = 0.02; t <= 8.0; t += 0.01) {
+                sp = 40.0;
+                y += (-0.5 * y + 10.0 * out) * 0.01;   // first-order plant
+                in = y;
+                g_micros = (unsigned long)(t * 1e6);
+                c.Compute();
+                if (t >= 2.0 && t < 3.9) { lagSum += 10.0 * t - y; lagN++; }
+            }
+            double lag = lagSum / lagN;       // old law: ~2.5 (v/Kp)
+            CHECK(lag < 0.6,
+                  "tracking: ADRC1 ramp lag below 0.6 units (was v/Kp = 2.5)");
+            CHECK(fabs(y - 40.0) < 1.0,
+                  "tracking: ADRC1 converges to the ramped setpoint");
+        }
+        // 13b. SetAppliedOutput(): observer stays consistent with an
+        //      externally saturated actuator; one-shot semantics
+        {
+            double in = 0, out = 0, sp = 100;
+            g_micros = 0;
+            ADRC c(&in, &out, &sp, 10, 4, 25);
+            c.SetOutputLimits(-200, 200);
+            c.SetSampleTime(10);
+            c.SetMode(AUTOMATIC);
+            CHECK(!c.SetAppliedOutput(HUGE_VAL), "applied: +Inf rejected");
+            CHECK(!c.SetAppliedOutput(NAN), "applied: NaN rejected");
+            ADRCDiagnostics d = c.GetDiagnostics();
+            CHECK(!d.appliedPending, "applied: rejected value not pending");
+            CHECK(c.SetAppliedOutput(123.0), "applied: finite accepted");
+            d = c.GetDiagnostics();
+            CHECK(d.appliedPending, "applied: pending visible in diagnostics");
+            double pos = 0, vel = 0, maxObsErr = 0, maxZ3 = 0, z3at2 = 0;
+            for (double t = 0.02; t <= 6.0; t += 0.01) {
+                double applied = out;
+                if (applied > 50.0) applied = 50.0;       // external saturation
+                else if (applied < -50.0) applied = -50.0;
+                c.SetAppliedOutput(applied);
+                double acc = 10.0 * applied;              // plant feels the REAL command
+                vel += acc * 0.01; pos += vel * 0.01;
+                in = pos;
+                g_micros = (unsigned long)(t * 1e6);
+                c.Compute();
+                double e = fabs(c.GetZ1() - pos);
+                if (e > maxObsErr) maxObsErr = e;
+                double z3 = fabs(c.GetZ3());
+                if (z3 > maxZ3) maxZ3 = z3;
+                if (t > 1.995 && t < 2.005) z3at2 = c.GetZ3();
+            }
+            d = c.GetDiagnostics();
+            CHECK(!d.appliedPending,
+                  "applied: consumed by every Compute (re-set each loop)");
+            CHECK(maxObsErr < 2.5,
+                  "applied: observer tracks y under external saturation");
+            CHECK(z3at2 > -800.0 && z3at2 < 500.0,
+                  "applied: z3 mid-climb sane (mismatch would pin it ~ -1500)");
+            CHECK(fabs(pos - 100.0) < 2.0,
+                  "applied: loop still reaches the setpoint");
+        }
+        // 13c. timing telemetry: last/max cycle and missed samples
+        {
+            double in = 0, out = 0, sp = 0;
+            g_micros = 0;
+            ADRC c(&in, &out, &sp, 10, 4, 25);
+            c.SetOutputLimits(-200, 200);
+            c.SetSampleTime(10);
+            c.SetMode(AUTOMATIC);
+            g_micros = 10000; c.Compute();   // real = 20000 (ctor at -10 ms)
+            g_micros = 20000; c.Compute();   // real = 10000
+            g_micros = 45000; c.Compute();   // real = 25000 > 2x10 ms: missed
+            g_micros = 55000; c.Compute();   // real = 10000
+            CHECK(c.GetLastCycleTimeUs() == 10000, "timing: last cycle 10 ms");
+            CHECK(c.GetMaxCycleTimeUs() == 25000, "timing: max cycle 25 ms");
+            CHECK(c.GetMissedSamples() == 1, "timing: exactly one missed sample");
+            ADRCDiagnostics d2 = c.GetDiagnostics();
+            CHECK(fabs(d2.lastCycleMs - 10.0) < 1e-3 &&
+                  fabs(d2.maxCycleMs - 25.0) < 1e-3,
+                  "timing: diagnostics report ms values");
+            sp = 1000; in = 0;               // force saturation
+            g_micros = 65000; c.Compute();
+            d2 = c.GetDiagnostics();
+            CHECK(d2.outputSaturated, "timing: saturation flag set at the limit");
+            sp = 0;
+            for (int k = 0; k < 5; k++) {
+                g_micros = 65000UL + 10000UL * (unsigned long)(k + 1);
+                c.Compute();
+            }
+            d2 = c.GetDiagnostics();
+            CHECK(!d2.outputSaturated, "timing: saturation flag clears when inside limits");
+            CHECK(d2.observerSafe, "timing: observer safe in diagnostics");
+        }
     }
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);

@@ -77,7 +77,7 @@ static long fuzz_##CLASSNAME(unsigned long seed) {                         \
         double outBefore = Output;                                         \
         unsigned long bitsBefore;                                          \
         memcpy(&bitsBefore, &outBefore, sizeof bitsBefore);                \
-        switch (rngNext() % 10) {                                          \
+        switch (rngNext() % 11) {                                          \
         case 0: { /* SetTunings with anything */                           \
             double a = rngSpecial(), b = rngSpecial(), d = rngSpecial();   \
             bool ok = c.SetTunings(a, b, d);                               \
@@ -101,14 +101,17 @@ static long fuzz_##CLASSNAME(unsigned long seed) {                         \
             break; }                                                       \
         case 2: { /* SetOutputLimits: track accepted values */             \
             double lo = rngSpecial(), hi = rngSpecial();                   \
-            if (isfinite(lo) && isfinite(hi) && lo < hi) {                 \
+            if (isfinite(lo) && isfinite(hi) && lo < hi &&        \
+                isfinite((float)lo) && isfinite((float)hi) &&        \
+                (float)lo < (float)hi) {                 \
                 outMin = (float)lo; outMax = (float)hi;   /* as stored */  \
             }                                                              \
             c.SetOutputLimits(lo, hi);                                     \
             break; }                                                       \
         case 3: c.SetMode((rngNext() & 7) ? AUTOMATIC : MANUAL); break;    \
         case 4: c.SetSetpointRamp(rngSpecial()); break;                    \
-        case 5: c.SetInputFilter(rngSpecial()); break;                     \
+        case 5: c.SetInputFilter(rngSpecial()); break;                    \
+        case 10: c.SetAppliedOutput(rngSpecial()); break;   /* v2.1.0 */   \
         default: { /* Compute with random sensor/setpoint and clock */     \
             Input = rngSpecial();                                          \
             if ((rngNext() & 7) == 0) Setpoint = rngSpecial();             \

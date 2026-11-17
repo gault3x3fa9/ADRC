@@ -27,6 +27,10 @@ ADRC::ADRC(double* Input, double* Output, double* Setpoint,
     dt = 0.010f;
     updateGains();
 
+    appliedOut = 0.0f; appliedValid = false;              // v2.1.0
+    lastCycleUs = 0; maxCycleUs = 0; missedSamples = 0;   // v2.1.0
+    outSaturated = false;                                 // v2.1.0
+
     lastTime = micros() - sampleTimeUs;
     lastComputeUs = lastTime;
 
@@ -201,6 +205,32 @@ bool ADRC::IsObserverSafe() const {
     return (omega_o * dt) <= 0.5f;
 }
 
+bool ADRC::SetAppliedOutput(double applied) {
+    // One-shot: consumed as u(k-1) by the next Compute(). Non-finite values
+    // are rejected and any pending value is kept.
+    if (!isfinite(applied)) return false;
+    float a = (float)applied;
+    if (!isfinite(a)) return false;            // beyond float range
+    appliedOut = a;
+    appliedValid = true;
+    return true;
+}
+
+ADRCDiagnostics ADRC::GetDiagnostics() const {
+    ADRCDiagnostics d;
+    d.z1 = z1; d.z2 = z2;
+    d.z3 = z3;
+    d.reference = rEff;
+    d.trackingError = rEff - z1;
+    d.lastCycleMs = (double)lastCycleUs * 1e-3;
+    d.maxCycleMs  = (double)maxCycleUs  * 1e-3;
+    d.missedSamples = missedSamples;
+    d.observerSafe = IsObserverSafe();
+    d.outputSaturated = outSaturated;
+    d.appliedPending = appliedValid;
+    return d;
+}
+
 bool ADRC::Compute() {
     if (!inAuto || computing) return false;          // reentrancy latch
     if (!myInput || !myOutput || !mySetpoint) return false;
@@ -218,6 +248,13 @@ bool ADRC::Compute() {
     unsigned long real = now - lastComputeUs;
     float stepDt = (real <= 2ULL * sampleTimeUs) ? (float)real * 1e-6f : dt;
     lastComputeUs = now;
+
+    // v2.1.0 timing telemetry: actual inter-sample time, worst case, and
+    // missed periods (real dt above 2x nominal = the loop stalled and the
+    // observer ran on the fallback dt).
+    lastCycleUs = real;
+    if (real > maxCycleUs) maxCycleUs = real;
+    if (real > 2ULL * sampleTimeUs) missedSamples++;
 
     // Drift-free scheduling; resynchronise if we fell badly behind.
     if (elapsed < 2ULL * sampleTimeUs) lastTime += sampleTimeUs;
@@ -244,20 +281,43 @@ bool ADRC::Compute() {
     }
 
     // Ramped reference: slew-limit r toward the setpoint (0 = passthrough)
+    // v2.1.0: rDot is the derivative of the EFFECTIVE reference, fed
+    // forward by the control law so a moving setpoint leaves no standing
+    // tracking lag (which was 2*v/omega_c on ADRC and v/Kp on ADRC1).
+    // Near the target the rate tapers with sqrt braking so the reference
+    // ARRIVES with zero slope: without it the plant would reach the
+    // setpoint still moving at the ramp rate and overshoot. The braking
+    // decel is rampRate*omega_c/4 - well below the loop bandwidth, so the
+    // plant can follow the deceleration instead of just watching it.
+    float rDot = 0.0f, rDDot = 0.0f;
     if (rampRate > 0.0f) {
         if (!rEffValid) { rEff = r; rEffValid = true; }
         else {
             float delta = r - rEff;
-            float step = rampRate * stepDt;
-            if (delta > step)       rEff += step;
-            else if (delta < -step) rEff -= step;
-            else                    rEff = r;
+            float adelta = delta < 0.0f ? -delta : delta;
+            float rate = rampRate;
+            float vAllow = sqrtf(0.5f * rampRate * omega_c * adelta);
+            if (vAllow < rate) {
+                rate = vAllow;
+                // constant braking decel, fed forward as rDDot so the
+                // plant tracks the deceleration with no velocity lag
+                rDDot = 0.25f * rampRate * omega_c;
+                if (delta > 0.0f) rDDot = -rDDot;
+            }
+            float step = rate * stepDt;
+            if (delta > step)       { rEff += step; rDot = rate; }
+            else if (delta < -step) { rEff -= step; rDot = -rate; }
+            else                    { rEff = r; rDDot = 0.0f; }  // no leak at rest
         }
     } else {
         rEff = r;
     }
 
-    float uPrev = (float)*myOutput;       // already saturated
+    // v2.1.0: if the user told us what the actuator REALLY applied
+    // (SetAppliedOutput), use that as u(k-1) for the observer - one-shot.
+    float uPrev = appliedValid ? appliedOut : (float)*myOutput;
+    appliedValid = false;
+
 
     computing = true;                     // state is mutated from here on
 
@@ -275,12 +335,14 @@ bool ADRC::Compute() {
     // the observer from the current sample instead and hold this round.
     if (!isfinite(z1) || !isfinite(z2) || !isfinite(z3)) {
         computing = false;
-        Initialize();
+        double keepOut = *myOutput;   // v2.1.0: a failed Compute must never
+        Initialize();                 // change Output (V2 invariant): undo
+        *myOutput = keepOut;          // the clamp Initialize() may apply
         return false;
     }
 
     // 3. State-error feedback (PD on estimated states, on the ramped ref)
-    float u0 = Kp * (rEff - z1) - Kd * z2;
+    float u0 = Kp * (rEff - z1) - Kd * (z2 - rDot) + rDDot;
 
     // 4. Disturbance compensation
     float u = (u0 - z3) * invB0;
@@ -291,8 +353,12 @@ bool ADRC::Compute() {
     //    rather than write it to the actuator).
     if (u > outMax) u = outMax;
     else if (u < outMin) u = outMin;
-    else if (u != u) u = uPrev;
+    // NaN (Inf-Inf cancellation in extreme tunings): hold what the
+    // actuator already has - uPrev may carry an arbitrary SetAppliedOutput
+    // value outside the limits, the current Output never is (v2.1.0).
+    else if (u != u) u = (float)*myOutput;
 
+    outSaturated = (u >= outMax || u <= outMin);   // v2.1.0 telemetry
     *myOutput = u;
     return true;
 }
@@ -319,6 +385,10 @@ ADRC1::ADRC1(double* Input, double* Output, double* Setpoint,
     sampleTimeUs = 10000UL;
     dt = 0.010f;
     updateGains();
+
+    appliedOut = 0.0f; appliedValid = false;              // v2.1.0
+    lastCycleUs = 0; maxCycleUs = 0; missedSamples = 0;   // v2.1.0
+    outSaturated = false;                                 // v2.1.0
 
     lastTime = micros() - sampleTimeUs;
     lastComputeUs = lastTime;
@@ -459,6 +529,32 @@ bool ADRC1::IsObserverSafe() const {
     return (omega_o * dt) <= 0.5f;
 }
 
+bool ADRC1::SetAppliedOutput(double applied) {
+    // One-shot: consumed as u(k-1) by the next Compute(). Non-finite values
+    // are rejected and any pending value is kept.
+    if (!isfinite(applied)) return false;
+    float a = (float)applied;
+    if (!isfinite(a)) return false;            // beyond float range
+    appliedOut = a;
+    appliedValid = true;
+    return true;
+}
+
+ADRCDiagnostics ADRC1::GetDiagnostics() const {
+    ADRCDiagnostics d;
+    d.z1 = z1; d.z2 = z2;
+    d.z3 = 0.0;
+    d.reference = rEff;
+    d.trackingError = rEff - z1;
+    d.lastCycleMs = (double)lastCycleUs * 1e-3;
+    d.maxCycleMs  = (double)maxCycleUs  * 1e-3;
+    d.missedSamples = missedSamples;
+    d.observerSafe = IsObserverSafe();
+    d.outputSaturated = outSaturated;
+    d.appliedPending = appliedValid;
+    return d;
+}
+
 bool ADRC1::Compute() {
     if (!inAuto || computing) return false;
     if (!myInput || !myOutput || !mySetpoint) return false;
@@ -471,6 +567,13 @@ bool ADRC1::Compute() {
     float stepDt = (real <= 2ULL * sampleTimeUs) ? (float)real * 1e-6f : dt;
     lastComputeUs = now;
 
+    // v2.1.0 timing telemetry: actual inter-sample time, worst case, and
+    // missed periods (real dt above 2x nominal = the loop stalled and the
+    // observer ran on the fallback dt).
+    lastCycleUs = real;
+    if (real > maxCycleUs) maxCycleUs = real;
+    if (real > 2ULL * sampleTimeUs) missedSamples++;
+
     if (elapsed < 2ULL * sampleTimeUs) lastTime += sampleTimeUs;
     else lastTime = now;
 
@@ -478,14 +581,33 @@ bool ADRC1::Compute() {
     float r = (float)*mySetpoint;
     if (!isfinite(y) || !isfinite(r)) return false;
 
+    // v2.1.0: rDot is the derivative of the EFFECTIVE reference, fed
+    // forward by the control law so a moving setpoint leaves no standing
+    // tracking lag (which was 2*v/omega_c on ADRC and v/Kp on ADRC1).
+    // Near the target the rate tapers with sqrt braking so the reference
+    // ARRIVES with zero slope: without it the plant would reach the
+    // setpoint still moving at the ramp rate and overshoot. The braking
+    // decel is rampRate*omega_c/4 - well below the loop bandwidth, so the
+    // plant can follow the deceleration instead of just watching it.
+    float rDot = 0.0f, rDDot = 0.0f;
     if (rampRate > 0.0f) {
         if (!rEffValid) { rEff = r; rEffValid = true; }
         else {
             float delta = r - rEff;
-            float step = rampRate * stepDt;
-            if (delta > step)       rEff += step;
-            else if (delta < -step) rEff -= step;
-            else                    rEff = r;
+            float adelta = delta < 0.0f ? -delta : delta;
+            float rate = rampRate;
+            float vAllow = sqrtf(0.5f * rampRate * omega_c * adelta);
+            if (vAllow < rate) {
+                rate = vAllow;
+                // constant braking decel, fed forward as rDDot so the
+                // plant tracks the deceleration with no velocity lag
+                rDDot = 0.25f * rampRate * omega_c;
+                if (delta > 0.0f) rDDot = -rDDot;
+            }
+            float step = rate * stepDt;
+            if (delta > step)       { rEff += step; rDot = rate; }
+            else if (delta < -step) { rEff -= step; rDot = -rate; }
+            else                    { rEff = r; rDDot = 0.0f; }  // no leak at rest
         }
     } else {
         rEff = r;
@@ -505,7 +627,10 @@ bool ADRC1::Compute() {
         y = yFilt;
     }
 
-    float uPrev = (float)*myOutput;
+    // v2.1.0: one-shot applied-output override for the observer
+    float uPrev = appliedValid ? appliedOut : (float)*myOutput;
+    appliedValid = false;
+
 
     computing = true;
 
@@ -519,20 +644,28 @@ bool ADRC1::Compute() {
     // Self-healing: see ADRC::Compute (overflowing states re-initialise)
     if (!isfinite(z1) || !isfinite(z2)) {
         computing = false;
+        double keepOut = *myOutput;   // v2.1.0: V2 invariant (see ADRC)
         Initialize();
+        *myOutput = keepOut;
         return false;
     }
 
     // 3. Proportional control on the estimated state + disturbance rejection
-    float u0 = Kp * (rEff - z1);
+    // (first-order law: only rDot applies; rDDot is a 2nd-order concept)
+    (void)rDDot;
+    float u0 = Kp * (rEff - z1) + rDot;
     float u = (u0 - z2) * invB0;
 
     computing = false;
 
     if (u > outMax) u = outMax;
     else if (u < outMin) u = outMin;
-    else if (u != u) u = uPrev;
+    // NaN (Inf-Inf cancellation in extreme tunings): hold what the
+    // actuator already has - uPrev may carry an arbitrary SetAppliedOutput
+    // value outside the limits, the current Output never is (v2.1.0).
+    else if (u != u) u = (float)*myOutput;
 
+    outSaturated = (u >= outMax || u <= outMin);   // v2.1.0 telemetry
     *myOutput = u;
     return true;
 }
@@ -576,6 +709,10 @@ NLADRC::NLADRC(double* Input, double* Output, double* Setpoint,
     dt = 0.010f;
     updateGains();
     updateFalCoeffs();
+
+    appliedOut = 0.0f; appliedValid = false;              // v2.1.0
+    lastCycleUs = 0; maxCycleUs = 0; missedSamples = 0;   // v2.1.0
+    outSaturated = false;                                 // v2.1.0
 
     lastTime = micros() - sampleTimeUs;
     lastComputeUs = lastTime;
@@ -760,6 +897,32 @@ bool NLADRC::IsObserverSafe() const {
     return (omega_o * dt) <= 0.5f;
 }
 
+bool NLADRC::SetAppliedOutput(double applied) {
+    // One-shot: consumed as u(k-1) by the next Compute(). Non-finite values
+    // are rejected and any pending value is kept.
+    if (!isfinite(applied)) return false;
+    float a = (float)applied;
+    if (!isfinite(a)) return false;            // beyond float range
+    appliedOut = a;
+    appliedValid = true;
+    return true;
+}
+
+ADRCDiagnostics NLADRC::GetDiagnostics() const {
+    ADRCDiagnostics d;
+    d.z1 = z1; d.z2 = z2;
+    d.z3 = z3;
+    d.reference = rEff;
+    d.trackingError = rEff - z1;
+    d.lastCycleMs = (double)lastCycleUs * 1e-3;
+    d.maxCycleMs  = (double)maxCycleUs  * 1e-3;
+    d.missedSamples = missedSamples;
+    d.observerSafe = IsObserverSafe();
+    d.outputSaturated = outSaturated;
+    d.appliedPending = appliedValid;
+    return d;
+}
+
 bool NLADRC::Compute() {
     if (!inAuto || computing) return false;
     if (!myInput || !myOutput || !mySetpoint) return false;
@@ -772,6 +935,13 @@ bool NLADRC::Compute() {
     float stepDt = (real <= 2ULL * sampleTimeUs) ? (float)real * 1e-6f : dt;
     lastComputeUs = now;
 
+    // v2.1.0 timing telemetry: actual inter-sample time, worst case, and
+    // missed periods (real dt above 2x nominal = the loop stalled and the
+    // observer ran on the fallback dt).
+    lastCycleUs = real;
+    if (real > maxCycleUs) maxCycleUs = real;
+    if (real > 2ULL * sampleTimeUs) missedSamples++;
+
     if (elapsed < 2ULL * sampleTimeUs) lastTime += sampleTimeUs;
     else lastTime = now;
 
@@ -779,14 +949,33 @@ bool NLADRC::Compute() {
     float r = (float)*mySetpoint;
     if (!isfinite(y) || !isfinite(r)) return false;  // NaN/Inf: hold the output
 
+    // v2.1.0: rDot is the derivative of the EFFECTIVE reference, fed
+    // forward by the control law so a moving setpoint leaves no standing
+    // tracking lag (which was 2*v/omega_c on ADRC and v/Kp on ADRC1).
+    // Near the target the rate tapers with sqrt braking so the reference
+    // ARRIVES with zero slope: without it the plant would reach the
+    // setpoint still moving at the ramp rate and overshoot. The braking
+    // decel is rampRate*omega_c/4 - well below the loop bandwidth, so the
+    // plant can follow the deceleration instead of just watching it.
+    float rDot = 0.0f, rDDot = 0.0f;
     if (rampRate > 0.0f) {
         if (!rEffValid) { rEff = r; rEffValid = true; }
         else {
             float delta = r - rEff;
-            float step = rampRate * stepDt;
-            if (delta > step)       rEff += step;
-            else if (delta < -step) rEff -= step;
-            else                    rEff = r;
+            float adelta = delta < 0.0f ? -delta : delta;
+            float rate = rampRate;
+            float vAllow = sqrtf(0.5f * rampRate * omega_c * adelta);
+            if (vAllow < rate) {
+                rate = vAllow;
+                // constant braking decel, fed forward as rDDot so the
+                // plant tracks the deceleration with no velocity lag
+                rDDot = 0.25f * rampRate * omega_c;
+                if (delta > 0.0f) rDDot = -rDDot;
+            }
+            float step = rate * stepDt;
+            if (delta > step)       { rEff += step; rDot = rate; }
+            else if (delta < -step) { rEff -= step; rDot = -rate; }
+            else                    { rEff = r; rDDot = 0.0f; }  // no leak at rest
         }
     } else {
         rEff = r;
@@ -806,7 +995,10 @@ bool NLADRC::Compute() {
         y = yFilt;
     }
 
-    float uPrev = (float)*myOutput;
+    // v2.1.0: one-shot applied-output override for the observer
+    float uPrev = appliedValid ? appliedOut : (float)*myOutput;
+    appliedValid = false;
+
 
     computing = true;
 
@@ -822,14 +1014,17 @@ bool NLADRC::Compute() {
     // Self-healing (same contract as the family)
     if (!isfinite(z1) || !isfinite(z2) || !isfinite(z3)) {
         computing = false;
-        Initialize();
+        double keepOut = *myOutput;   // v2.1.0: a failed Compute must never
+        Initialize();                 // change Output (V2 invariant): undo
+        *myOutput = keepOut;          // the clamp Initialize() may apply
         return false;
     }
 
     // 3. Nonlinear state-error feedback: u0 = Kp*fal(r-z1) + Kd*fal(-z2)
     float e1 = rEff - z1;
-    float e2 = -z2;
-    float u0 = Kp * fal(e1, a1, dCtrl, pow1c) + Kd * fal(e2, a2, dCtrl, pow2c);
+    float e2 = rDot - z2;
+    float u0 = Kp * fal(e1, a1, dCtrl, pow1c) + Kd * fal(e2, a2, dCtrl, pow2c)
+             + rDDot;
 
     // 4. Disturbance compensation
     float u = (u0 - z3) * invB0;
@@ -838,8 +1033,12 @@ bool NLADRC::Compute() {
 
     if (u > outMax) u = outMax;
     else if (u < outMin) u = outMin;
-    else if (u != u) u = uPrev;
+    // NaN (Inf-Inf cancellation in extreme tunings): hold what the
+    // actuator already has - uPrev may carry an arbitrary SetAppliedOutput
+    // value outside the limits, the current Output never is (v2.1.0).
+    else if (u != u) u = (float)*myOutput;
 
+    outSaturated = (u >= outMax || u <= outMin);   // v2.1.0 telemetry
     *myOutput = u;
     return true;
 }
